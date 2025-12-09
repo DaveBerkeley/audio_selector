@@ -29,8 +29,6 @@ class GpioIn(Elaboratable):
                 m.d.sync += [
                     self.o.valid.eq(1),
                     self.o.data.eq(self.i),
-                    self.o.first.eq(1),
-                    self.o.last.eq(1),
                     self.prev.eq(self.i),
                 ]
 

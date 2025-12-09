@@ -122,6 +122,8 @@ def get_attr(v=None, pull=None, opendrain=None, drive=None, diff=False, r=None, 
         d = {
             "IO_TYPE" : io_type,
         }
+        if pull:
+            d["PULLMODE"] = { "down" : "DOWN", "up" : "UP", }[pull]
         return attrs(**d)
 
     assert 0, family # TODO

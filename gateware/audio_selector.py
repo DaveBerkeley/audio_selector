@@ -25,6 +25,9 @@ right_layout = [("right", audio)]
 stereo_layout = left_layout + right_layout
 led_layout = [("addr", 8), ("r", 8), ("g", 8), ("b", 8), ]
 
+#
+#
+
 class TR:
     # Top-level Router 
     GPIO = 0
@@ -33,6 +36,15 @@ class TR:
     MONITOR = 6
     AUX = 15
     KEYS = 16
+
+routes = [
+    #TR.GPIO,
+    TR.LED,
+    #TR.MONITOR,
+    #TR.SELECT,
+    TR.AUX,
+    TR.KEYS,
+]
 
 #
 #
@@ -45,7 +57,7 @@ class UI(Elaboratable):
 
     def __init__(self):
         keys = 3
-        chans = 5
+        chans = 4
         leds = 8
         bright = 0xff
         self.nkeys = keys
@@ -206,18 +218,10 @@ class Meter(Elaboratable):
 class AudioSelector(Elaboratable):
 
     def __init__(self, freq):
+        self.sys_ck = freq
         self.mods = []
         self.connects = []
         self.comb = []
-
-        routes = [
-            #TR.GPIO,
-            TR.LED,
-            #TR.MONITOR,
-            TR.SELECT,
-            TR.AUX,
-            TR.KEYS,
-        ]
 
         self.in_arb = Arbiter(layout=control_layout, n=2)
         self.mods += [ self.in_arb ]
@@ -243,9 +247,10 @@ class AudioSelector(Elaboratable):
         self.mods += [ self.gpio_aux ]
         self.connects += [ (self.router.o[TR.AUX], self.gpio_aux.i) ]
 
-        self.gpio_select = GpioOut(4, name="gpio.select")
-        self.mods += [ self.gpio_select ]
-        self.connects += [ (self.router.o[TR.SELECT], self.gpio_select.i) ]
+        if TR.SELECT in routes:
+            self.gpio_select = GpioOut(4, name="gpio.select")
+            self.mods += [ self.gpio_select ]
+            self.connects += [ (self.router.o[TR.SELECT], self.gpio_select.i) ]
 
         led_device = "ws2812" # "yf923"
         self.ws2812 = LedStream(N=8, sys_ck=freq, device=led_device)
@@ -323,14 +328,14 @@ class AudioSelector(Elaboratable):
         ]
 
         if TR.KEYS in routes:
-            self.gpio_in = GpioIn(3, name="gpio.ui")
-            self.mods += [ self.gpio_in ]
+            self.gpio_ui = GpioIn(3, name="gpio.ui")
+            self.mods += [ self.gpio_ui ]
 
-            key_layout = self.gpio_in.o.get_layout()
+            key_layout = self.gpio_ui.o.get_layout()
             self.key_arb = Arbiter(layout=key_layout, n=2) 
             self.mods += [ self.key_arb ]
             self.connects += [ (self.router.o[TR.KEYS], self.key_arb.i[0]) ]
-            self.connects += [ (self.gpio_in.o, self.key_arb.i[1]) ]
+            self.connects += [ (self.gpio_ui.o, self.key_arb.i[1]) ]
 
             self.ui = UI()
             self.mods += [ self.ui ]
@@ -363,22 +368,23 @@ class AudioSelector(Elaboratable):
         for eq in self.comb:
             m.d.comb += eq
 
-        # The channel selection is done by gpio_select
+        # The channel selection
         m.d.comb += [
-            self.l_select.select.eq(self.gpio_select.o),
-            self.r_select.select.eq(self.gpio_select.o),
+            self.l_select.select.eq(self.ui.channel),
+            self.r_select.select.eq(self.ui.channel),
         ]
 
         if hasattr(self, "monitor"):
             mons = [
                 ("spi.o", self.spi.o, {}),
+                ("gpio_ui.o", self.gpio_ui.o, {}),
                 ("router.i", self.router.i, {}),
                 #("gpio.led.i", self.gpio_led.i, {}),
                 ("i2si[0].o", self.i2si[0].left, {}),
                 ("l_select.i[0]", self.l_select.i[0], {}),
                 ("l_select.i[1]", self.l_select.i[1], {}),
                 ("l_select.i[2]", self.l_select.i[2], {}),
-                ("l_select.i[3]", self.l_select.i[3], {}),
+                #("l_select.i[3]", self.l_select.i[3], {}),
                 ("l_select.o", self.l_select.o, {}),
                 #("join.o", self.join.o, {"data":"left"}),
                 #("meter.o", self.meter.o, {}),
@@ -387,13 +393,22 @@ class AudioSelector(Elaboratable):
             for idx, (name, s, mm) in enumerate(mons):
                 m.d.comb += self.monitor.tap(s, f"{idx}_" + name, idx, mm)
 
-        # External Xtal is Fs * 1024
-        counter = Signal(4)
+        # turning the rotational encoder can give a quadrature pulse < 10e-3 long
+        debounce_sample = 4e3
+        clock_bits = bits_for(int(self.sys_ck / debounce_sample))
+        self.counter = counter = Signal(clock_bits)
         m.d.sync += counter.eq(counter + 1)
+        # External Xtal is Fs * 1024
         # We need Fs * 128 for the SPDIF 2*clock signal
         m.d.comb += self.spdif.en.eq((counter & 0x07) == 0)
         # We need Fs * 64 for the I2S output 2*clock signal
         m.d.comb += self.i2s_txck.enable.eq((counter & 0x0f) == 0)
+
+        self.debounce = Signal()
+        m.d.sync += self.debounce.eq(counter == 0)
+
+        # debounce (sample) clock for the UI buttons
+        m.d.sync += self.gpio_ui.en.eq((counter & 0xffffffff) == 0)
  
         return m
 
@@ -457,6 +472,11 @@ class _System(AudioSelector):
         except ResourceError as ex:
             print(ex)
 
+        # connect the rotatry switch
+        sw = platform.request("sw", 0)
+        # invert the signals, so the switch gives 1 on press
+        m.d.comb += self.gpio_ui.i.eq(~sw.i)
+
         if hasattr(self, "monitor"):
             s = self.monitor.o0
             sd = self.monitor.o0.data
@@ -467,13 +487,15 @@ class _System(AudioSelector):
         test = platform.request("test", 0)
         m.d.comb += [
             test.o.eq(Cat(
-                self.spdif.o,
-                i2s.sck.i,
-                i2s.ws.i,
-                i2s.d0.i,
-                i2s.d1.i,
-                i2s.d2.i,
-                i2s.d3.i,
+                sw.i,
+                self.gpio_ui.en,
+                #self.spdif.o,
+                #i2s.sck.i,
+                #i2s.ws.i,
+                #i2s.d0.i,
+                #i2s.d1.i,
+                #i2s.d2.i,
+                #i2s.d3.i,
                 #i2s.mck.i,
                 s.valid,
                 s.ready,
@@ -513,7 +535,7 @@ class System(_System):
         if hasattr(self, "gpio_led"):
             m.d.comb += leds.eq(Cat(self.gpio_led.o))
         else:
-            m.d.comb += leds.eq(1 << self.gpio_select.o)
+            m.d.comb += leds.eq(1 << self.l_select.select)
 
         return m
 
@@ -539,6 +561,7 @@ def get_resources(platform, lang="Amaranth"):
         pmod_spdif = ("pmod", 0)
         pmod_i2si  = ("pmod", 1)
         pmod_test  = ("pmod", 4)
+        pmod_sw    = ("pmod", 3) # 1V8 port
 
         r = []
         r += make_spi(conn=pmod_spi)
@@ -548,6 +571,7 @@ def get_resources(platform, lang="Amaranth"):
         r += make_i2s_o(conn=pmod_i2so, idx=1)
         r += make_io("ws2812", idx=0, _pins="10", _dir="o", conn=pmod_spdif, v="3V3")
         r += make_clock(freq=49.152e6, _pin="10", name="ckext", conn=pmod_spi)
+        r += make_io("sw", idx=0, _pins="4 3 2", _dir="i", conn=pmod_sw, v="1V8", pull="up")
         return r
 
     assert 0, (family, platform)

@@ -86,19 +86,20 @@ def sim_ui(m):
 
         expects = [
             [ 0, 0 ],
-            [ 0, 4 ],
             [ 0, 3 ],
             [ 0, 2 ],
             [ 0, 1 ],
             [ 0, 0 ],
-            [ 0, 4 ],
-            [ 4, 4 ],
-            [ 4, 0 ],
-            [ 4, 1 ],
-            [ 4, 2 ],
-            [ 4, 3 ],
-            [ 4, 4 ],
-            [ 4, 0 ],
+            [ 0, 3 ],
+            [ 0, 2 ],
+            [ 2, 2 ],
+            [ 2, 3 ],
+            [ 2, 0 ],
+            [ 2, 1 ],
+            [ 2, 2 ],
+            [ 2, 3 ],
+            [ 2, 0 ],
+            [ 0, 0 ],
         ]
 
         d = sink.get_data()
@@ -108,10 +109,10 @@ def sim_ui(m):
             x = [ get(a) for a in p ]
             r, g = decode(x)
             #print(r, g)
-            assert [r, g] == expects[i]
+            assert [r, g] == expects[i], ([r, g], expects[i])
 
     sim.add_clock(1 / 50e6)
-    sim.add_sync_process(proc)
+    sim.add_process(proc)
     with sim.write_vcd("gtk/ui.vcd", traces=[]):
         sim.run()
 
