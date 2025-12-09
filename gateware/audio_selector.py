@@ -393,10 +393,10 @@ class AudioSelector(Elaboratable):
             for idx, (name, s, mm) in enumerate(mons):
                 m.d.comb += self.monitor.tap(s, f"{idx}_" + name, idx, mm)
 
-        # turning the rotational encoder can give a quadrature pulse < 10e-3 long
-        debounce_sample = 4e3
-        clock_bits = bits_for(int(self.sys_ck / debounce_sample))
-        self.counter = counter = Signal(clock_bits)
+        # turning the rotational encoder can give a quadrature pulse ~ 4ms long
+        debounce_freq = 1 / 4e-3
+        clock_bits = bits_for(int(self.sys_ck / debounce_freq))
+        counter = Signal(clock_bits)
         m.d.sync += counter.eq(counter + 1)
         # External Xtal is Fs * 1024
         # We need Fs * 128 for the SPDIF 2*clock signal
@@ -487,8 +487,6 @@ class _System(AudioSelector):
         test = platform.request("test", 0)
         m.d.comb += [
             test.o.eq(Cat(
-                sw.i,
-                self.gpio_ui.en,
                 #self.spdif.o,
                 #i2s.sck.i,
                 #i2s.ws.i,
