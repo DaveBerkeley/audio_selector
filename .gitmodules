@@ -1,0 +1,3 @@
+[submodule "lib/streams"]
+	path = lib/streams
+	url = https://github.com/DaveBerkeley/streams.git
