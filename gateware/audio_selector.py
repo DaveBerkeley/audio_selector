@@ -16,8 +16,6 @@ from gpio import GpioOut
 
 from ppm import StereoAbs, PPM, BarGraph
 
-from hat import TR
-
 audio = 16
 audio_layout = [("data", audio)]
 control = 32
@@ -25,6 +23,14 @@ control_layout = [("data", control)]
 left_layout = [("left", audio)]
 right_layout = [("right", audio)]
 stereo_layout = left_layout + right_layout
+
+class TR:
+    # Top-level Router 
+    GPIO = 0
+    LED = 1
+    SELECT = 2
+    MONITOR = 6
+    AUX = 15
 
 #
 #
