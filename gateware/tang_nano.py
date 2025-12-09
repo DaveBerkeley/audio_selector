@@ -53,18 +53,7 @@ def ext_clock(freq, Platform, ck_name="ckext"):
     class _Platform(Platform):
         default_clk = ck_name
         ck_freq = freq
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
 
-            #from amaranth.build.dsl import Clock
-            #r = [
-            #    Resource(ck_name, 0, 
-            #             Pins(pin, dir="i"), 
-            #             Clock(freq), 
-            #             Attrs(GLOBAL=False, IO_STANDARD="LVCMOS33")
-            #    ),
-            #]
-            #self.add_resources(r)
     return _Platform()
 
 #
@@ -82,14 +71,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    #platform = TangNanoDock()
-    #x = platform.get_pll(48e6)
-    #print(x)
-    #domains = [] # [ ("fast", freq * 2, None, None), ]
-    #from pll import make_platform
-    #platform = make_platform(TangNanoDock)(args.freq, domains=domains)
-    #platform.ck_freq = platform.default_clk_frequency
-
     freq = args.freq
     # external clock
     ext_freq = 48e3 * 512 # External MCK from I2S pin "72"
@@ -101,6 +82,7 @@ if __name__ == "__main__":
     platform.add_resources(r)
 
     dut = System(freq)
+    # TODO : how are the clock constraints passed to Amaranth?
     #platform.add_clock_constraint(s, freq)
 
     platform.build(dut, do_program=args.prog, verbose=args.verbose)

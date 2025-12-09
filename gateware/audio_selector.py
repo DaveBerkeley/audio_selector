@@ -12,7 +12,7 @@ from streams.monitor import Monitor
 from streams.ws2812 import LedStream
 from streams.ops import Enumerate
 
-from gpio import GpioOut
+from gpio import GpioOut, GpioIn
 
 from ppm import StereoAbs, PPM, BarGraph
 
@@ -23,6 +23,7 @@ control_layout = [("data", control)]
 left_layout = [("left", audio)]
 right_layout = [("right", audio)]
 stereo_layout = left_layout + right_layout
+led_layout = [("addr", 8), ("r", 8), ("g", 8), ("b", 8), ]
 
 class TR:
     # Top-level Router 
@@ -31,6 +32,130 @@ class TR:
     SELECT = 2
     MONITOR = 6
     AUX = 15
+    KEYS = 16
+
+#
+#
+
+class UI(Elaboratable):
+
+    KEY_SW = 0x01
+    KEY_A  = 0x02
+    KEY_B  = 0x04
+
+    def __init__(self):
+        keys = 3
+        chans = 5
+        leds = 8
+        bright = 0xff
+        self.nkeys = keys
+        self.chans = chans
+        self.bright = bright
+
+        self.keys = Stream(layout=[("data", keys)], name="keys")
+        self.i = Stream(layout=led_layout, name="i")
+        self.o = Stream(layout=led_layout, name="o")
+
+        self.key_state = Signal(keys)
+
+        self.channel = Signal(range(chans))
+        self.edit = Signal(range(chans))
+        self.edit_mode = Signal()
+
+        self.leds = leds
+        self.led = Signal(range(leds+1))
+        self.update = Signal()
+
+    def elaborate(self, _):
+        m = Module()
+
+        with m.If(self.o.valid & self.o.ready):
+            m.d.sync += self.o.valid.eq(0)
+        with m.If(~self.i.ready):
+            m.d.sync += self.i.ready.eq(1)
+        with m.If(self.i.valid & self.i.ready):
+            m.d.sync += self.i.ready.eq(0)
+            # copy in to out, unless in edit_mode
+            with m.If(~self.edit_mode):
+                m.d.sync += self.o.valid.eq(1)
+                m.d.sync += self.o.payload_eq(self.i.cat_payload(flags=True), flags=True)
+
+        # Update LED output with the edit_mode state
+        with m.If(self.update | self.led):
+            with m.If(~self.o.valid):
+                m.d.sync += [
+                    self.o.valid.eq(1),
+                    self.o.first.eq(self.led==0),
+                    self.o.last.eq(self.led==(self.leds-1)),
+                    self.o.addr.eq(self.led),
+                    self.o.r.eq(0),
+                    self.o.g.eq(0),
+                    self.o.b.eq(0),
+
+                    self.led.eq(self.led + 1),
+                    self.update.eq(0),
+                ]
+                with m.If(self.led == self.channel):
+                    m.d.sync += self.o.r.eq(self.bright)
+                with m.If(self.led == self.edit):
+                    m.d.sync += self.o.g.eq(self.bright)
+
+                with m.If(self.led == (self.leds-1)):
+                    m.d.sync += self.led.eq(0)
+
+        with m.If((~self.keys.ready) & (self.led == 0)):
+            m.d.sync += self.keys.ready.eq(1)
+
+        key_on = Signal(self.nkeys)
+        key_off = Signal(self.nkeys)
+        key_diff = Signal(self.nkeys)
+        m.d.comb += [
+            key_on.eq(self.keys.data & ~self.key_state),
+            key_off.eq(self.key_state & ~self.keys.data),
+            key_diff.eq(self.key_state ^ self.keys.data),
+        ]
+
+        with m.If(self.keys.valid & self.keys.ready):
+            m.d.sync += self.keys.ready.eq(0)
+            m.d.sync += self.key_state.eq(self.keys.data)
+            # process key input
+            with m.If(self.edit_mode):
+                # in edit mode
+                with m.If(key_on & self.KEY_SW):
+                    # enter the selection, exit edit_mode
+                    m.d.sync += [
+                        self.channel.eq(self.edit),
+                        self.edit_mode.eq(0),
+                    ]
+                with m.If(key_on & self.KEY_A):
+                    # change the channel
+                    m.d.sync += [
+                        self.update.eq(1),
+                    ]
+                    with m.If(self.keys.data & self.KEY_B):
+                        # increment edit channel
+                        with m.If(self.edit == (self.chans-1)):
+                            m.d.sync += self.edit.eq(0)
+                        with m.Else():
+                            m.d.sync += self.edit.eq(self.edit + 1)
+                    with m.Else():
+                        # decrement edit channel
+                        with m.If(self.edit == 0):
+                            m.d.sync += self.edit.eq(self.chans - 1)
+                        with m.Else():
+                            m.d.sync += self.edit.eq(self.edit - 1)
+
+            with m.Else():
+                # currently in pass-thru mode
+                with m.If(key_on & self.KEY_SW):
+                    # switch to edit_mode
+                    m.d.sync += [
+                        self.edit_mode.eq(1),
+                        self.edit.eq(self.channel),
+                        self.update.eq(1),
+                    ]
+
+        return m
 
 #
 #
@@ -91,6 +216,7 @@ class AudioSelector(Elaboratable):
             #TR.MONITOR,
             TR.SELECT,
             TR.AUX,
+            TR.KEYS,
         ]
 
         self.in_arb = Arbiter(layout=control_layout, n=2)
@@ -125,10 +251,9 @@ class AudioSelector(Elaboratable):
         self.ws2812 = LedStream(N=8, sys_ck=freq, device=led_device)
         self.mods += [ self.ws2812 ]
 
-        led_layout = self.ws2812.i.get_layout()
         self.led_arb = Arbiter(layout=led_layout, n=2)
         self.mods += [ self.led_arb ]
-        self.connects += [ (self.led_arb.o, self.ws2812.i) ]
+        led_src = self.led_arb.o
  
         self.comb += self.ws2812.connect(self.router.o[TR.LED], self.led_arb.i[0])
 
@@ -196,6 +321,24 @@ class AudioSelector(Elaboratable):
         self.connects += [
             (self.meter.o, self.led_arb.i[1], ["g","b"], {"data":"g"}, {"data":dim}),
         ]
+
+        if TR.KEYS in routes:
+            self.gpio_in = GpioIn(3, name="gpio.ui")
+            self.mods += [ self.gpio_in ]
+
+            key_layout = self.gpio_in.o.get_layout()
+            self.key_arb = Arbiter(layout=key_layout, n=2) 
+            self.mods += [ self.key_arb ]
+            self.connects += [ (self.router.o[TR.KEYS], self.key_arb.i[0]) ]
+            self.connects += [ (self.gpio_in.o, self.key_arb.i[1]) ]
+
+            self.ui = UI()
+            self.mods += [ self.ui ]
+            self.connects += [ (self.key_arb.o, self.ui.keys) ]
+            self.connects += [ (self.led_arb.o, self.ui.i) ]
+            led_src = self.ui.o
+
+        self.connects += [ (led_src, self.ws2812.i) ]
 
         if TR.MONITOR in routes:
             self.monitor = Monitor(layout=audio_layout, n=8)
