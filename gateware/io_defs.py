@@ -15,6 +15,11 @@ hdl_lang = None
 device = None
 package = None
 
+def device_to_family(device):
+    if device == "GW1NR-LV9QN88PC6/I5":
+        return "GW1NR-9C", "QN88P"
+    assert 0, device
+
 def set_platform(platform, lang="Amaranth"):
     global family, hdl_lang, device, package
     if hasattr(platform, "family"):
@@ -23,11 +28,13 @@ def set_platform(platform, lang="Amaranth"):
         family = platform.device_family
     hdl_lang = lang
     device = platform.device
-    if hasattr(platform, "package"):
-        package = platform.package
-    else:
-        print("platform.package not available on Litex!", file=sys.stderr)
-    print(family, device, package, hdl_lang)
+    if family is None:
+        family, package = device_to_family(device)
+
+    if package is None:
+        if hasattr(platform, "package"):
+            package = platform.package
+    print(f"family={family} device={device}, package={package}, hdl_lang={hdl_lang}")
 
 #
 #
@@ -36,8 +43,16 @@ def attrs(*args, **kwargs):
     if hdl_lang == "Amaranth":
         return ab.Attrs(**kwargs)
     if hdl_lang == "LiteX":
-        from litex.build.generic_platform import IOStandard
-        return IOStandard(*args)
+        from litex.build.generic_platform import IOStandard, Misc
+        d = kwargs
+        name = d['IO_TYPE']
+        del d['IO_TYPE']
+        fn = IOStandard(name)
+        if d:
+            assert len(d) == 1
+            (k, v), = d.items()
+            fn = fn, Misc(f"{k}={v}")
+        return fn
 
     assert 0, (hdl_lang, args, kwargs)
 
@@ -94,14 +109,6 @@ def get_attr(v=None, pull=None, opendrain=None, drive=None, diff=False, r=None, 
     assert opendrain is None # TODO
     assert drive is None # TODO
 
-    if hdl_lang == "LiteX":
-        assert pull is None # TODO
-        return attrs(io[v])
-
-    if family == "iCE40":
-        assert pull is None # TODO
-        return attrs(IO_STANDARD=io[v])
- 
     if family == "ecp5":
         io_type = io[v]
         if diff:
@@ -126,6 +133,14 @@ def get_attr(v=None, pull=None, opendrain=None, drive=None, diff=False, r=None, 
             d["PULLMODE"] = { "down" : "DOWN", "up" : "UP", }[pull]
         return attrs(**d)
 
+    if hdl_lang == "LiteX":
+        assert pull is None, (family, hdl_lang) # TODO
+        return attrs(io[v])
+
+    if family == "iCE40":
+        assert pull is None, (family, hdl_lang) # TODO
+        return attrs(IO_STANDARD=io[v])
+ 
     assert 0, family # TODO
 
 #

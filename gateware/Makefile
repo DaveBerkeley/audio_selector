@@ -4,6 +4,7 @@ build/top.fs: tang_nano.py audio_selector.py io_defs.py gpio.py
 
 clean:
 	rm -rf build
+	find . -name "*~" | xargs rm
 
 ctags:
 	ctags -R .
