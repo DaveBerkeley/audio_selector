@@ -3,11 +3,11 @@ from amaranth import *
 from amaranth.utils import bits_for
 from amaranth.build import ResourceError
 
-from streams import Stream, Join, Sink, Arbiter, Tee
+from streams import Stream, Join, Sink, Arbiter, Tee, Split
 from streams.spi import SpiPeripheral
 from streams.i2s import I2SRxClock, I2STxClock, I2SInputLR, I2SOutput
 from streams.route import Router, Select
-from streams.spdif import SPDIF_Tx
+from streams.spdif import SPDIF_Tx, SPDIF_Rx
 from streams.monitor import Monitor
 from streams.ws2812 import LedStream
 from streams.ops import Enumerate
@@ -55,9 +55,8 @@ class UI(Elaboratable):
     KEY_A  = 0x02
     KEY_B  = 0x04
 
-    def __init__(self):
+    def __init__(self, chans=5):
         keys = 3
-        chans = 4
         leds = 8
         bright = 0xff
         self.nkeys = keys
@@ -269,10 +268,14 @@ class AudioSelector(Elaboratable):
         self.mods += [ self.i2s_txck ]
 
         adcs = 4
+        spdif_in = True
+        selects = adcs
+        if spdif_in:
+            selects += 1
 
-        self.l_select = Select(layout=[("data", audio)], n=adcs, wait_last=False, sink=True)
+        self.l_select = Select(layout=[("data", audio)], n=selects, wait_last=False, sink=True)
         self.mods += [ self.l_select ]
-        self.r_select = Select(layout=[("data", audio)], n=adcs, wait_last=False, sink=True)
+        self.r_select = Select(layout=[("data", audio)], n=selects, wait_last=False, sink=True)
         self.mods += [ self.r_select ]
 
         self.i2si = []
@@ -344,6 +347,30 @@ class AudioSelector(Elaboratable):
             led_src = self.ui.o
 
         self.connects += [ (led_src, self.ws2812.i) ]
+
+        if spdif_in:
+            self.rx = SPDIF_Rx()
+            self.mods += [ self.rx ]
+            self.rx_split = Split(layout=stereo_layout)
+            self.mods += [ self.rx_split ]
+            # truncate 20-bit audio to 16-bit
+            def to16_l(m,a,b):
+                def trunc(name, src, dst):
+                    s = Signal(audio)
+                    m.d.comb += s.eq(src)
+                    return [ dst.eq(s >> 4) ]
+                return trunc
+            def to16_r(m,a,b):
+                def trunc(name, src, dst):
+                    s = Signal(signed(audio))
+                    m.d.comb += s.eq(src)
+                    return [ dst.eq(s >> 4) ]
+                return trunc
+            self.connects += [ 
+                (self.rx.audio, self.rx_split.i, ["good"], {}, {"left":to16_l,"right":to16_r}),
+                (self.rx_split.left, self.l_select.i[selects-1], [], {"left":"data"}),
+                (self.rx_split.right, self.r_select.i[selects-1], [], {"right":"data"}),
+            ]
 
         if TR.MONITOR in routes:
             self.monitor = Monitor(layout=audio_layout, n=8)
@@ -428,24 +455,33 @@ class _System(AudioSelector):
             # specific connections.
             platform = self.platform
             wrapper = platform.wrapper
-            def fromi(s): return wrapper.from_migen(s)
-            def too(s): return wrapper.from_amaranth(s)
-            assert 0, "TODO"
+            def from_i(s): return wrapper.from_migen(s)
+            def to_o(s): return wrapper.from_amaranth(s)
         else:
-            def fromi(s): return s.i
-            def too(s): return s.o
+            def from_i(s): return s.i
+            def to_o(s): return s.o
 
         spi = platform.request("spi", 0)
 
         m.d.comb += [
-            self.spi.phy.scs.eq(spi.cs.i),
-            self.spi.phy.sck.eq(spi.sck.i),
-            self.spi.phy.copi.eq(spi.copi.i),
+            self.spi.phy.scs.eq(from_i(spi.cs)),
+            self.spi.phy.sck.eq(from_i(spi.sck)),
+            self.spi.phy.copi.eq(from_i(spi.copi)),
         ]
 
         spdif = platform.request("spdif", 0)
-        m.d.comb += spdif.tx.o.eq(self.spdif.o)
         m.d.comb += self.spdif.aux.eq(self.gpio_aux.o)
+
+        if hasattr(self, "rx"):
+            m.d.comb += self.rx.i.eq(spdif.rx.i)
+            idx = len(self.l_select.i) - 1
+            with m.If(self.ui.channel == idx):
+                # spdif input to the output
+                m.d.comb += spdif.tx.o.eq(spdif.rx.i)
+            with m.Else():
+                m.d.comb += spdif.tx.o.eq(self.spdif.o)
+        else:
+            m.d.comb += spdif.tx.o.eq(self.spdif.o)
 
         # I2S output monitor
         i2s = platform.request("i2s", 1)
