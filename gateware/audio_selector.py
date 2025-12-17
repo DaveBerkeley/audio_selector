@@ -588,6 +588,15 @@ def get_resources(platform, lang="Amaranth"):
     except AttributeError:
         family = platform.devicename
 
+    def make_io_board(conn):
+        # audio selector PCB. see LinuxNotes_07-Dec-2025
+        r = []
+        r += make_spi(conn=conn)
+        r += make_spdif(conn=conn, idx=0, order="10 9")
+        r += make_io("ws2812", idx=0, _pins="7", _dir="o", conn=conn, v="3V3")
+        r += make_clock(freq=49.152e6, _pin="8", name="ckext", conn=conn)
+        return r
+
     if family == "GW1NR-9C":
         # TangNano 9k
         pmod_spi   = ("pmod", 2)
@@ -606,6 +615,25 @@ def get_resources(platform, lang="Amaranth"):
         r += make_io("ws2812", idx=0, _pins="10", _dir="o", conn=pmod_spdif, v="3V3")
         r += make_clock(freq=49.152e6, _pin="10", name="ckext", conn=pmod_spi)
         r += make_io("sw", idx=0, _pins="4 3 2", _dir="i", conn=pmod_sw, v="1V8", pull="up")
+        return r
+
+    if family == "ecp5":
+        # colorlight i9
+        # TODO
+        pmod_i2so  = ("pmod", 4)
+        pmod_sw    = ("pmod", 5)
+        pmod_io    = ("pmod", 6)
+        pmod_i2si  = ("pmod", 7)
+        pmod_test  = ("pmod", 8)
+        pmod_test2 = ("pmod", 9)
+
+        r = []
+        r += make_test(idx=0, conn=pmod_test)
+        r += make_test(idx=1, conn=pmod_test2)
+        r += make_i2s_backplane(conn=pmod_i2si, idx=0)
+        r += make_i2s_o(conn=pmod_i2so, idx=1)
+        r += make_io("sw", idx=0, _pins="4 3 2", _dir="i", conn=pmod_sw, v="3V3", pull="up")
+        r += make_io_board(pmod_io)
         return r
 
     assert 0, (family, platform)

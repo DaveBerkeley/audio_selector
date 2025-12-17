@@ -68,15 +68,22 @@ if __name__ == "__main__":
     parser.add_argument("--prog", action="store_true", help="generate Stream graph")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--freq", type=float, default=27e6*2)
+    parser.add_argument("--platform", default="tangnano")
 
     args = parser.parse_args()
+
+    if args.platform == "tangnano":
+        Platform = TangNanoDock
+    elif args.platform == "i9":
+        from colorlight_i9_r7_2 import Colorlight_i9_R72Platform as Platform
 
     freq = args.freq
     # external clock
     ext_freq = 48e3 * 512 # External MCK from I2S pin "72"
     ext_freq = 48e3 * 1024 # External Xtal on PMOD pin "38" "29" "51"
     freq = ext_freq
-    platform = ext_clock(freq, TangNanoDock)
+
+    platform = ext_clock(freq, Platform)
 
     r = get_resources(platform)
     platform.add_resources(r)
