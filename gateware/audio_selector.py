@@ -351,25 +351,36 @@ class AudioSelector(Elaboratable):
         if spdif_in:
             self.rx = SPDIF_Rx()
             self.mods += [ self.rx ]
-            self.rx_split = Split(layout=stereo_layout)
+            layout_20 = [("left",20), ("right",20)]
+            self.rx_split = Split(layout=layout_20)
             self.mods += [ self.rx_split ]
-            # truncate 20-bit audio to 16-bit
-            def to16_l(m,a,b):
-                def trunc(name, src, dst):
-                    s = Signal(audio)
-                    m.d.comb += s.eq(src)
-                    return [ dst.eq(s >> 4) ]
-                return trunc
-            def to16_r(m,a,b):
-                def trunc(name, src, dst):
-                    s = Signal(signed(audio))
-                    m.d.comb += s.eq(src)
-                    return [ dst.eq(s >> 4) ]
-                return trunc
+
+            class Truncate(Elaboratable):
+                # truncate 20-bit audio to 16-bit
+                def __init__(self):
+                    self.i = Stream(layout=[("data", 20,)], name="i")
+                    self.o = Stream(layout=[("data", 16,)], name="o")
+                    self.s = Signal(signed(20))
+
+                def elaborate(self, _):
+                    m = Module()
+                    m.d.comb += Stream.connect(self.i, self.o, exclude=["data"])
+                    m.d.comb += self.s.eq(self.i.data)
+                    with m.If(self.i.valid & self.i.ready):
+                        m.d.sync += self.o.data.eq(self.s >> 4)
+                    return m
+
+            self.l_trunc = Truncate()
+            self.mods += [ self.l_trunc ]
+            self.r_trunc = Truncate()
+            self.mods += [ self.r_trunc ]
+
             self.connects += [ 
-                (self.rx.audio, self.rx_split.i, ["good"], {}, {"left":to16_l,"right":to16_r}),
-                (self.rx_split.left, self.l_select.i[selects-1], [], {"left":"data"}),
-                (self.rx_split.right, self.r_select.i[selects-1], [], {"right":"data"}),
+                (self.rx.audio, self.rx_split.i, ["good"]),
+                (self.rx_split.left, self.l_trunc.i, [], {"left":"data"}),
+                (self.rx_split.right, self.r_trunc.i, [], {"right":"data"}),
+                (self.l_trunc.o, self.l_select.i[selects-1]),
+                (self.r_trunc.o, self.r_select.i[selects-1]),
             ]
 
         if TR.MONITOR in routes:
@@ -456,7 +467,7 @@ class _System(AudioSelector):
             platform = self.platform
             wrapper = platform.wrapper
             def from_i(s): return wrapper.from_migen(s)
-            def to_o(s): return wrapper.from_amaranth(s)
+            def to_o(s): return wrapper.from_migen(s)
         else:
             def from_i(s): return s.i
             def to_o(s): return s.o
@@ -473,45 +484,45 @@ class _System(AudioSelector):
         m.d.comb += self.spdif.aux.eq(self.gpio_aux.o)
 
         if hasattr(self, "rx"):
-            m.d.comb += self.rx.i.eq(spdif.rx.i)
+            m.d.comb += self.rx.i.eq(from_i(spdif.rx))
             idx = len(self.l_select.i) - 1
             with m.If(self.ui.channel == idx):
                 # spdif input to the output
-                m.d.comb += spdif.tx.o.eq(spdif.rx.i)
+                m.d.comb += to_o(spdif.tx).eq(from_i(spdif.rx))
             with m.Else():
-                m.d.comb += spdif.tx.o.eq(self.spdif.o)
+                m.d.comb += to_o(spdif.tx).eq(self.spdif.o)
         else:
-            m.d.comb += spdif.tx.o.eq(self.spdif.o)
+            m.d.comb += to_o(spdif.tx).eq(self.spdif.o)
 
         # I2S output monitor
         i2s = platform.request("i2s", 1)
         m.d.comb += [
-            i2s.sck.o.eq(self.i2so.phy.sck),
-            i2s.ws.o.eq(self.i2so.phy.ws),
-            i2s.sd.o.eq(self.i2so.phy.sd),
+            to_o(i2s.sck).eq(self.i2so.phy.sck),
+            to_o(i2s.ws).eq(self.i2so.phy.ws),
+            to_o(i2s.sd).eq(self.i2so.phy.sd),
         ]
 
         i2s = platform.request("i2s", 0)
         # connect the I2S timing to the rx_clock
         m.d.comb += [
-            self.i2s_rxck.sck.eq(i2s.sck.i),
-            self.i2s_rxck.ws.eq(i2s.ws.i),
+            self.i2s_rxck.sck.eq(from_i(i2s.sck)),
+            self.i2s_rxck.ws.eq(from_i(i2s.ws)),
         ]
         # connect the I2S data inputs
         for i, i2si in enumerate(self.i2si):
             s = getattr(i2s, f"d{i}")
-            m.d.comb += i2si.i.eq(s.i)
+            m.d.comb += i2si.i.eq(from_i(s))
 
         try:
             ws2812 = platform.request("ws2812", 0)
-            m.d.comb += ws2812.o.eq(self.ws2812.o)
+            m.d.comb += to_o(ws2812).eq(self.ws2812.o)
         except ResourceError as ex:
             print(ex)
 
         # connect the rotatry switch
         sw = platform.request("sw", 0)
         # invert the signals, so the switch gives 1 on press
-        m.d.comb += self.gpio_ui.i.eq(~sw.i)
+        m.d.comb += self.gpio_ui.i.eq(~from_i(sw))
 
         if hasattr(self, "monitor"):
             s = self.monitor.o0
@@ -522,7 +533,7 @@ class _System(AudioSelector):
 
         test = platform.request("test", 0)
         m.d.comb += [
-            test.o.eq(Cat(
+            to_o(test).eq(Cat(
                 #self.spdif.o,
                 #i2s.sck.i,
                 #i2s.ws.i,
