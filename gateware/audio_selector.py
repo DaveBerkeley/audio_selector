@@ -1,7 +1,6 @@
 
 from amaranth import *
 from amaranth.utils import bits_for
-from amaranth.build import ResourceError
 
 from streams import Stream, Join, Sink, Arbiter, Tee, Split
 from streams.spi import SpiPeripheral
@@ -503,13 +502,16 @@ class _System(AudioSelector):
         try:
             ws2812 = platform.request("ws2812", 0)
             comb += [ to_o(ws2812).eq(self.ws2812.o) ]
-        except ResourceError as ex:
+        except Exception as ex:
             print(ex)
 
         # connect the rotary switch
-        sw = platform.request("sw", 0)
-        # invert the signals, so the switch gives 1 on press
-        comb += [ self.gpio_ui.i.eq(~from_i(sw)) ]
+        try:
+            sw = platform.request("sw", 0)
+            # invert the signals, so the switch gives 1 on press
+            comb += [ self.gpio_ui.i.eq(~from_i(sw)) ]
+        except Exception as ex:
+            print(ex)
 
         if hasattr(self, "monitor"):
             s = self.monitor.o0
@@ -518,26 +520,29 @@ class _System(AudioSelector):
             s = self.join.o
             sd = s.left
 
-        test = platform.request("test", 0)
-        comb += [
-            to_o(test).eq(Cat(
-                #self.spdif.o,
-                #i2s.sck.i,
-                #i2s.ws.i,
-                #i2s.d0.i,
-                #i2s.d1.i,
-                #i2s.d2.i,
-                #i2s.d3.i,
-                #i2s.mck.i,
-                s.valid,
-                s.ready,
-                #self.gpio_select.o,
-                self.l_select.o.data,
-                #s.first,
-                #s.last,
-                sd,
-            )),
-        ]
+        try:
+            test = platform.request("test", 0)
+            comb += [
+                to_o(test).eq(Cat(
+                    #self.spdif.o,
+                    #i2s.sck.i,
+                    #i2s.ws.i,
+                    #i2s.d0.i,
+                    #i2s.d1.i,
+                    #i2s.d2.i,
+                    #i2s.d3.i,
+                    #i2s.mck.i,
+                    s.valid,
+                    s.ready,
+                    #self.gpio_select.o,
+                    self.l_select.o.data,
+                    #s.first,
+                    #s.last,
+                    sd,
+                )),
+            ]
+        except Exception as ex:
+            print(ex)
 
         self.comb = comb
         return comb
@@ -570,7 +575,7 @@ class System(_System):
                 led = platform.request("led", i)
                 leds.append(led.o)
                 i += 1
-            except ResourceError as ex:
+            except Exception as ex:
                 print("led error:", ex)
                 break
         leds = Cat(leds)
@@ -616,14 +621,16 @@ def get_resources(platform, lang="Amaranth"):
         pmod_sw    = ("pmod", 3) # 1V8 port
 
         r = []
-        r += make_spi(conn=pmod_spi)
-        r += make_test(conn=pmod_test)
-        r += make_spdif(conn=pmod_spdif, idx=0)
+        #r += make_test(conn=pmod_test)
         r += make_i2s_backplane(conn=pmod_i2si, idx=0)
         r += make_i2s_o(conn=pmod_i2so, idx=1)
+        #r += make_io("sw", idx=0, _pins="4 3 2", _dir="i", conn=pmod_sw, v="3V3", pull="up")
+
+        # will be replaced by make_io_board()
+        r += make_spi(conn=pmod_spi)
+        r += make_spdif(conn=pmod_spdif, idx=0)
         r += make_io("ws2812", idx=0, _pins="10", _dir="o", conn=pmod_spdif, v="3V3")
         r += make_clock(freq=49.152e6, _pin="10", name="ckext", conn=pmod_spi)
-        r += make_io("sw", idx=0, _pins="4 3 2", _dir="i", conn=pmod_sw, v="1V8", pull="up")
         return r
 
     if family == "ecp5":
