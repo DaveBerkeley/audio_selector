@@ -87,13 +87,13 @@ br_ys = [ 0, ((bp_dy-br_w)/2) - 21, bp_dy-br_w, ];
 
 // Third party strip of 8 WS2812 LEDs
 
-led_dx = 54.2;
-led_dy = 10;
+led_dx = 54.4;
+led_dy = 10.25;
 led_pcb = 1.3;
 led_component = 2.3;
 led_thick = 3;
-led_led_dx = 4.9;
-led_led_dy = 4.9;
+led_led_dx = 5;
+led_led_dy = 5;
 led_led_pitch = 6.6;
 led_led_y0 = 1;
 led_hole_r = m3_thread_r;
@@ -331,38 +331,52 @@ module base()
     *
     */
 
+// rotate around centre
+leds_rot = [ 0, 0, 180 ];
+leds_mv = [ -led_dx/2, -led_dy/2, 0 ];
+leds_back = [ led_dx/2, led_dy/2, 0 ];
+
 module led_strip(thick)
 {
-    // base pcb
-    cube([ led_dx, led_dy, thick ]);
+    translate(leds_back)
+    rotate(leds_rot)
+    translate(leds_mv)
+    {
+        // base pcb
+        cube([ led_dx, led_dy, thick ]);
 
-    // led block
-    dx = (7 * led_led_pitch) + led_led_dx;
-    x0 = (led_dx-dx)/2;
-    translate([ x0, led_led_y0, 0 ])
-    cube([ dx, led_led_dy, led_thick ]);
+        // led block
+        dx = (7 * led_led_pitch) + led_led_dx;
+        x0 = (led_dx-dx)/2;
+        translate([ x0, led_led_y0, 0 ])
+        cube([ dx, led_led_dy, led_thick ]);
 
-    // lumpy components
-    component_dy = 3;
-    component_y0 = 6;
-    translate([ 0, component_y0, 0 ] )
-    cube([ led_dx, component_dy, led_component ]);
-    
+        // lumpy components
+        component_dy = 3;
+        component_y0 = 6;
+        translate([ 0, component_y0, 0 ] )
+        cube([ led_dx, component_dy, led_component ]);
+    }
 }
 
 module led_strip_posts(h)
 {
     // mounting holes
-    hole_dx = (led_dx - led_hole_pitch) / 2;
-    points = [
-        hole_dx,
-        led_dx - hole_dx,
-    ];
-
-    for (x = points)
+    translate(leds_back)
+    rotate(leds_rot)
+    translate(leds_mv)
     {
-        translate([ x, led_hole_y0, led_thick - h ] )
-        cylinder(h = h, r=led_hole_r);
+        hole_dx = (led_dx - led_hole_pitch) / 2;
+        points = [
+            hole_dx,
+            led_dx - hole_dx,
+        ];
+
+        for (x = points)
+        {
+            translate([ x, led_hole_y0, led_thick - h ] )
+            cylinder(h = h, r=led_hole_r);
+        }
     }
 }
 
@@ -377,7 +391,7 @@ fp_jack_y0 = (bp_dy / 2) - 8;
 
 led_strip_x0 = 1 + ((bp_dz - led_dy) / 2);
 led_strip_y0 = bp_dx - 20;
-led_recess = -0.2; // thickness of panel for LEDs to shine through
+led_recess = -0.4; // thickness of panel for LEDs to shine through
 
 module back_panel()
 {
@@ -392,12 +406,12 @@ module back_panel()
 
             // mains switch
             translate( [ -0.01, sw_y0, sw_x0 ] )
-            #cube([ bp_thick+0.02, sw_dy, sw_dx,  ] );
+            cube([ bp_thick+0.02, sw_dy, sw_dx,  ] );
 
             // rotational encoder
             translate( [ -0.01, rot_y0, rot_x0 ] )
             rotate([ 0, 90, 0 ] )
-            #cylinder(h=bp_thick+0.02, r=rot_r);
+            cylinder(h=bp_thick+0.02, r=rot_r);
 
             // LED strip
             translate(led_strip_offset)
@@ -407,7 +421,7 @@ module back_panel()
             // audio jack
             translate( [ -0.01, fp_jack_y0, fp_jack_x0 ] )
             rotate([ 0, 90, 0 ] )
-            #cylinder(h=bp_thick+0.02, r=fp_jack_r);
+            cylinder(h=bp_thick+0.02, r=fp_jack_r);
         }
 
         // LED strip
@@ -487,6 +501,7 @@ if (1)
         if (1) base();
 
         if (1) 
+        //rotate( [ 0, 90, 0 ] )
         translate([ base_dx, 0, 0 ] )
         back_panel();   
     }
