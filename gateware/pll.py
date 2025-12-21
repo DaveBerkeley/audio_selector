@@ -1,118 +1,347 @@
 #!/bin/env python
 
-# Created by Claud.ai
+#   GoWin PLL for the TangNano 9k
+#
+#   see https://github.com/YosysHQ/apicula/blob/master/apycula/gowin_pll.py
+#   for example code and constraints
+#
+#   GoWin doc "primitive definition and usage of Gowin clock" UG286E
+#   contains details of the PLL calculations.
+#   Constraints for different devices are in 
+#   "GW1NRF series of FPGA Products Schematic Manual" UG294-1.3.2E
+#   (and others, for different devices)
+
+import re
 
 from amaranth import *
 from amaranth.lib.cdc import ResetSynchronizer
 
-class GoWinPLL(Elaboratable):
-    """
-    GoWin rPLL wrapper for GW1NR-9 FPGA.
-    
-    Parameters:
-    -----------
-    input_freq : float
-        Input clock frequency in MHz
-    output_freqs : dict
-        Dictionary of {name: freq_mhz} for each output clock domain
-        Example: {"fast": 100.0, "slow": 25.0}
- 
-    Attributes:
-    -----------
-    clk_in : Signal, input
-        Input clock signal
-    rst_in : Signal, input
-        Input reset signal
-    locked : Signal, output
-        PLL locked indicator
-    
-    Clock domains created:
-    ----------------------
-    For each entry in output_freqs, a clock domain named with the key
-    will be created (e.g., "fast", "slow")
-    """
-    
-    def __init__(self, input_freq, output_freqs):
-        self.input_freq = input_freq
-        self.output_freqs = output_freqs
+"""
+        # Create clock domains and connect outputs
+        for name in output_names:
+            m.domains += ClockDomain(name)
+            m.d.comb += ClockSignal(name).eq(output_map[name])
+            m.submodules[f"rst_sync_{name}"] = ResetSynchronizer(
+                ~pll_locked, domain=name
+            )
+            
+            if platform is not None and hasattr(platform, 'add_period_constraint'):
+                params = self.pll_params[name]
+                platform.add_period_constraint(
+                    output_map[name], 
+                    1e9 / params['actual_freq']
+                )
+        
+        m.d.comb += self.locked.eq(pll_locked)
+        
+        return m
+"""
 
-        # Calculate PLL parameters for each output
-        self.pll_params = {}
-        for name, freq in output_freqs.items():
-            self.pll_params[name] = self._calculate_pll_params(input_freq, freq)
+#   From https://github.com/YosysHQ/apicula/blob/master/apycula/gowin_pll.py
 
-        # I/O
+device_limits = {
+    "GW1N-1 C6/I5": {
+        "comment": "Untested",
+        "pll_name": "rPLL",
+        "pfd_min": 3,
+        "pfd_max": 400,
+        "vco_min": 400,
+        "vco_max": 900,
+        "clkout_min": 3.125,
+        "clkout_max": 450,
+    },
+    "GW1N-1 C5/I4": {
+        "comment": "Untested",
+        "pll_name": "rPLL",
+        "pfd_min": 3,
+        "pfd_max": 320,
+        "vco_min": 320,
+        "vco_max": 720,
+        "clkout_min": 2.5,
+        "clkout_max": 360,
+    },
+    "GW1NR-2 C7/I6": {
+        "comment": "Untested",
+        "pll_name": "PLLVR",
+        "pfd_min": 3,
+        "pfd_max": 400,
+        "vco_min": 400,
+        "vco_max": 800,
+        "clkout_min": 3.125,
+        "clkout_max": 750,
+    },
+    "GW1NR-2 C6/I5": {
+        "comment": "Untested",
+        "pll_name": "PLLVR",
+        "pfd_min": 3,
+        "pfd_max": 400,
+        "vco_min": 400,
+        "vco_max": 800,
+        "clkout_min": 3.125,
+        "clkout_max": 750,
+    },
+    "GW1NR-2 C5/I4": {
+        "comment": "Untested",
+        "pll_name": "PLLVR",
+        "pfd_min": 3,
+        "pfd_max": 320,
+        "vco_min": 320,
+        "vco_max": 640,
+        "clkout_min": 2.5,
+        "clkout_max": 640,
+    },
+    "GW1NR-4 C6/I5": {
+        "comment": "Untested",
+        "pll_name": "PLLVR",
+        "pfd_min": 3,
+        "pfd_max": 400,
+        "vco_min": 400,
+        "vco_max": 1000,
+        "clkout_min": 3.125,
+        "clkout_max": 500,
+    },
+    "GW1NR-4 C5/I4": {
+        "comment": "Untested",
+        "pll_name": "PLLVR",
+        "pfd_min": 3,
+        "pfd_max": 320,
+        "vco_min": 320,
+        "vco_max": 800,
+        "clkout_min": 2.5,
+        "clkout_max": 400,
+    },
+    "GW1NSR-4 C7/I6": {
+        "comment": "Untested",
+        "pll_name": "PLLVR",
+        "pfd_min": 3,
+        "pfd_max": 400,
+        "vco_min": 400,
+        "vco_max": 1200,
+        "clkout_min": 3.125,
+        "clkout_max": 600,
+    },
+    "GW1NSR-4 C6/I5": {
+        "comment": "Untested",
+        "pll_name": "PLLVR",
+        "pfd_min": 3,
+        "pfd_max": 400,
+        "vco_min": 400,
+        "vco_max": 1200,
+        "clkout_min": 3.125,
+        "clkout_max": 600,
+    },
+    "GW1NSR-4 C5/I4": {
+        "comment": "Untested",
+        "pll_name": "PLLVR",
+        "pfd_min": 3,
+        "pfd_max": 320,
+        "vco_min": 320,
+        "vco_max": 960,
+        "clkout_min": 2.5,
+        "clkout_max": 480,
+    },
+    "GW1NSR-4C C7/I6": {
+        "comment": "Untested",
+        "pll_name": "PLLVR",
+        "pfd_min": 3,
+        "pfd_max": 400,
+        "vco_min": 400,
+        "vco_max": 1200,
+        "clkout_min": 3.125,
+        "clkout_max": 600,
+    },
+    "GW1NSR-4C C6/I5": {
+        "comment": "Untested",
+        "pll_name": "PLLVR",
+        "pfd_min": 3,
+        "pfd_max": 400,
+        "vco_min": 400,
+        "vco_max": 1200,
+        "clkout_min": 3.125,
+        "clkout_max": 600,
+    },
+    "GW1NSR-4C C5/I4": {
+        "comment": "Untested",
+        "pll_name": "PLLVR",
+        "pfd_min": 3,
+        "pfd_max": 320,
+        "vco_min": 320,
+        "vco_max": 960,
+        "clkout_min": 2.5,
+        "clkout_max": 480,
+    },
+    "GW1NR-9 C7/I6": {
+        "comment": "Untested",
+        "pll_name": "rPLL",
+        "pfd_min": 3,
+        "pfd_max": 400,
+        "vco_min": 400,
+        "vco_max": 1200,
+        "clkout_min": 3.125,
+        "clkout_max": 600,
+    },
+    "GW1NR-9 C6/I5": {
+        "comment": "tested on TangNano9K Board",
+        "pll_name": "rPLL",
+        "pfd_min": 3,
+        "pfd_max": 400,
+        "vco_min": 400,
+        "vco_max": 1200,
+        "clkout_min": 3.125,
+        "clkout_max": 600,
+    },
+    "GW1NR-9 C6/I4": {
+        "comment": "Untested",
+        "pll_name": "rPLL",
+        "pfd_min": 3,
+        "pfd_max": 320,
+        "vco_min": 3200,
+        "vco_max": 960,
+        "clkout_min": 2.5,
+        "clkout_max": 480,
+    },
+    "GW1NZ-1 C6/I5": {
+        "comment": "untested",
+        "pll_name": "rPLL",
+        "pfd_min": 3,
+        "pfd_max": 400,
+        "vco_min": 400,
+        "vco_max": 800,
+        "clkout_min": 3.125,
+        "clkout_max": 400,
+    },
+    "GW2A-18 C8/I7": {
+        "comment": "untested",
+        "pll_name": "rPLL",
+        "pfd_min": 3,
+        "pfd_max": 500,
+        "vco_min": 500,
+        "vco_max": 1250,
+        "clkout_min": 3.90625,
+        "clkout_max": 625,
+    },
+    "GW2AR-18 C8/I7": {
+        "comment": "untested",
+        "pll_name": "rPLL",
+        "pfd_min": 3,
+        "pfd_max": 500,
+        "vco_min": 500,
+        "vco_max": 1250,
+        "clkout_min": 3.90625,
+        "clkout_max": 625,
+    },
+    "GW5A-25 ES": {
+        "comment": "untested",
+        "pll_name": "rPLL",
+        "pfd_min": 19,
+        "pfd_max": 800,
+        "vco_min": 800,
+        "vco_max": 1600,
+        # The previous four parameters are taken from the datasheet (as in
+        # this case from https://cdn.gowinsemi.com.cn/DS1103E.pdf), but I
+        # don't know where these two come from:(
+        "clkout_min": 6.25,
+        "clkout_max": 1600,
+    },
+}
+
+#
+#
+
+class PLL(Elaboratable):
+
+    def __init__(self, fin, fout, limits):
+        self.limits = limits
+        self.config = self.calc(fin, fout, limits)
+        self.params = self.instance_params(self.config, limits['device'])
+        #print(self.config)
+
         self.clk_in = Signal()
         self.rst_in = Signal()
+        self.clk_out = Signal()
         self.locked = Signal()
-        
-    def _calculate_pll_params(self, fin, fout):
-        """
-        Calculate PLL parameters for GoWin rPLL.
-        
-        rPLL equation: fout = fin * FBDIV / (IDIV * ODIV)
-        
-        Constraints for GW1NR-9:
-        - IDIV: 1-64
-        - FBDIV: 1-64
-        - ODIV: 1, 2, 4, 8, 16, 32, 48, 64, 80, 96, 112, 128
-        - VCO freq: 400-1200 MHz (fvco = fin * FBDIV / IDIV)
-        """
-        odiv_options = [1, 2, 4, 8, 16, 32, 48, 64, 80, 96, 112, 128]
-        
-        best_error = float('inf')
-        best_params = None
-        
-        for idiv in range(1, 65):
-            for fbdiv in range(1, 65):
-                fvco = fin * fbdiv / idiv
-                
-                # Check VCO constraints
-                if fvco < 400 or fvco > 1200:
-                    continue
-                
-                for odiv in odiv_options:
-                    calc_fout = fin * fbdiv / (idiv * odiv)
-                    error = abs(calc_fout - fout)
-                    
-                    if error < best_error:
-                        best_error = error
-                        best_params = {
-                            'idiv': idiv,
-                            'fbdiv': fbdiv,
-                            'odiv': odiv,
-                            'actual_freq': calc_fout,
-                            'error_mhz': error,
-                            'error_pct': (error / fout) * 100
-                        }
-        
-        if best_params is None:
-            raise ValueError(f"Cannot generate {fout} MHz from {fin} MHz input")
 
-        return best_params
+        self.params.update(
+            i_CLKIN=self.clk_in,
+            i_RESET=self.rst_in,
+            o_LOCK=self.locked,
+        )
+        if self.config['sdiv'] == 1:
+            self.params.update(o_CLKOUT=self.clk_out)
+        else:
+            self.params.update(o_CLKOUTD=self.clk_out)                    
+        #print(self.params)
 
     def elaborate(self, _):
         m = Module()
-        
-        # Create a single PLL instance for the first output
-        # (GoWin PLLs typically support multiple outputs)
-        primary_name = list(self.output_freqs.keys())[0]
-        primary_params = self.pll_params[primary_name]
-        
-        # Create output clock signals
-        clk_outputs = {}
-        for name in self.output_freqs.keys():
-            clk_outputs[name] = Signal(name=f"pll_clk_{name}")
-        
-        # Instantiate the rPLL primitive
-        pll_locked = Signal()
-        
-        m.submodules.pll = Instance("rPLL",
-            # Parameters
-            p_FCLKIN=str(self.input_freq),
-            p_IDIV_SEL=primary_params['idiv'] - 1,  # 0-based
-            p_FBDIV_SEL=primary_params['fbdiv'] - 1,  # 0-based
-            p_ODIV_SEL=self._odiv_to_sel(primary_params['odiv']),
+        self.instance = Instance(self.limits['pll_name'], **self.params)
+        m.submodules += self.instance
+        return m
+
+    @classmethod
+    def calc(cls, fin, fout, limits):
+        idiv_range = list(range(0, 64))
+        fbdiv_range = list(range(0, 64))
+        odiv_range = [ 2, 4, 8, 16, 32, 48, 64, 80, 96, 112, 128 ]
+        # 1 means don't use sdiv, so use clk_out, otherwise use clk_outd 
+        sdiv_range = [ 1 ] + list(range(2, 41, 2))
+
+        def pfd_valid(f): return limits['pfd_min'] <= f <= limits['pfd_max']
+        def vco_valid(f): return limits['vco_min'] <= f <= limits['vco_max']
+        def clock_valid(f): return limits['clkout_min'] <= f <= limits['clkout_max']
+
+        err_max = fin
+        config = {}
+
+        for sdiv in sdiv_range:
+            for idiv in idiv_range:
+                for fbdiv in fbdiv_range:
+                    for odiv in odiv_range:
+                        # Check the Phase Frequency Detector is within range
+                        # on both inputs of the phase detector.
+                        pfd = fin / (idiv + 1)
+                        if not pfd_valid(pfd):
+                            continue
+                        pfd = fout / (fbdiv + 1)
+                        if not pfd_valid(pfd):
+                            continue
+
+                        # Check VCO range
+                        vco = fin * (fbdiv + 1) * odiv / (idiv + 1)
+                        if not vco_valid(vco):
+                            continue
+
+                        # Check clock out range
+                        ckout = fin * (fbdiv + 1) / ((idiv + 1) * sdiv)
+                        if not clock_valid(ckout):
+                            continue
+
+                        err = abs(fout - ckout)
+                        if err < err_max:
+                            err_max = err
+                            config = dict(fin=fin, 
+                                        freq=fout, 
+                                        ckout=ckout, 
+                                        vco=vco,
+                                        idiv=idiv,
+                                        fbdiv=fbdiv,
+                                        odiv=odiv,
+                                        sdiv=sdiv,
+                                        percent=100*abs(err/fout),
+                                        err=err,
+                            )
+                            if err == 0.0:
+                                return config
+        return config
+
+    @classmethod
+    def instance_params(cls, params, device):
+        d = dict(
+            p_DEVICE=device,
+            p_FCLKIN=params['fin'],
+            p_IDIV_SEL=params['idiv'],
+            p_FBDIV_SEL=params['fbdiv'],
+            p_ODIV_SEL=params['odiv'],
             p_DYN_IDIV_SEL="false",
             p_DYN_FBDIV_SEL="false",
             p_DYN_ODIV_SEL="false",
@@ -127,14 +356,10 @@ class GoWinPLL(Elaboratable):
             p_CLKOUT_BYPASS="false",
             p_CLKOUTP_BYPASS="false",
             p_CLKOUTD_BYPASS="false",
-            p_DYN_SDIV_SEL=2,
             p_CLKOUTD_SRC="CLKOUT",
             p_CLKOUTD3_SRC="CLKOUT",
-            
-            # Ports
-            i_CLKIN=self.clk_in,
+
             i_CLKFB=0,
-            i_RESET=self.rst_in,
             i_RESET_P=0,
             i_FBDSEL=0,
             i_IDSEL=0,
@@ -142,74 +367,47 @@ class GoWinPLL(Elaboratable):
             i_PSDA=0,
             i_DUTYDA=0,
             i_FDLY=0,
-            
-            o_CLKOUT=clk_outputs[primary_name],
-            o_LOCK=pll_locked,
-            o_CLKOUTP=Signal(),  # 90° phase output (unused)
-            o_CLKOUTD=Signal(),  # Divided output (unused)
-            o_CLKOUTD3=Signal(), # 3x divided output (unused)
         )
-        
-        m.d.comb += self.locked.eq(pll_locked)
-        
-        # Create clock domains for each output
-        for name, clk_sig in clk_outputs.items():
-            # Create the clock domain
-            cd = ClockDomain(name)
-            m.domains += cd
-            m.d.comb += cd.clk.eq(clk_sig)
-            
-            # Synchronize reset to the new clock domain
-            m.submodules += ResetSynchronizer(~pll_locked, domain=name)
-        
-        return m
     
-    def _odiv_to_sel(self, odiv):
-        """Convert ODIV value to SEL parameter"""
-        odiv_map = {
-            1: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5,
-            48: 6, 64: 7, 80: 8, 96: 9, 112: 10, 128: 11
-        }
-        return odiv_map[odiv]
-    
-    def print_config(self):
-        """Print the calculated PLL configuration"""
-        print(f"Input frequency: {self.input_freq} MHz")
-        print("\nOutput configurations:")
-        for name, params in self.pll_params.items():
-            target = self.output_freqs[name]
-            print(f"\n{name}:")
-            print(f"  Target:  {target:.6f} MHz")
-            print(f"  Actual:  {params['actual_freq']:.6f} MHz")
-            print(f"  Error:   {params['error_mhz']:.6f} MHz ({params['error_pct']:.4f}%)")
-            print(f"  IDIV:    {params['idiv']}")
-            print(f"  FBDIV:   {params['fbdiv']}")
-            print(f"  ODIV:    {params['odiv']}")
+        if params['sdiv'] != 1:
+            d.update(p_DYN_SDIV_SEL=params['sdiv'])
 
+        return d
 
-# Example usage
+#
+#
+
+def get_limits(device):
+    regex = r"(GW[125][A-Z]{1,3})-[A-Z]{0,2}([0-9]{1,2})[A-Z]{1,3}[0-9]{1,3}P*N*(C[0-9]/I[0-9]|ES)"
+    match = re.search(regex, device)
+    if not match:
+        raise Exception(f'cannot decipher the name of the device {device}.')
+
+    key = f"{match.group(1)}-{match.group(2)} {match.group(3)}"
+    device = f"{match.group(1)}"
+
+    limits = device_limits[key]
+    limits = limits.copy()
+    limits['device'] = device
+    return limits
+
 if __name__ == "__main__":
-    # Example: 27 MHz input, generate multiple clock domains
-    pll = GoWinPLL(
-        input_freq=27.0,
-        output_freqs={
-            "sync": 50.0,    # Main system clock
-            "audio": 49.152,
-            "fast": 49.152 * 2,
-        }
-    )
- 
-    pll.print_config()
-    
-    # In your top-level design, you would use it like:
-    # m.submodules.pll = pll
-    # m.d.comb += [
-    #     pll.clk_in.eq(ClockSignal("sync")),
-    #     pll.rst_in.eq(ResetSignal("sync")),
-    # ]
-    # 
-    # Then use the clock domains:
-    # m.d.sync += counter.eq(counter + 1)  # Uses "sync" domain
-    # m.d.pixel += ...  # Uses "pixel" domain
-    # m.d.slow += ...   # Uses "slow" domain
 
+    import sys
+
+    dev = "GW1NR-LV9QN88PC6/I5"
+    limits = get_limits(dev)
+    #print(limits)
+
+    fin = 27
+    fin = 49.125
+    for f in range(1, 200):
+        params = PLL.calc(fin, f, limits)
+        #print(params)
+        if not params:
+            print("No PLL solution found", file=sys.stderr)
+            continue
+        pll = PLL(fin, f, limits) 
+        print(f, *[ params[field] for field in [ 'vco', 'ckout', 'percent', 'sdiv' ] ])
+
+#   FIN
