@@ -58,8 +58,8 @@ psu_x0 = 30;
 psu_y0 = -15 - psu_dy;
 
 // base
-base_dx = 130;
-base_dy = 170;
+base_dx = 158;
+base_dy = 178;
 base_thick = 2;
 // back panel
 bp_dx = 100;
@@ -83,7 +83,7 @@ br_d = 10;
 br_t = 4;
 br_hole_r = m3_hole_r;
 br_thread_r = m3_thread_r;
-br_ys = [ 0, ((bp_dy-br_w)/2) - 21, bp_dy-br_w, ];
+br_ys = [ 0, ((bp_dy-br_w)/2) - 28, bp_dy-br_w, ];
 
 // Third party strip of 8 WS2812 LEDs
 
@@ -205,7 +205,7 @@ module boards()
 {
     adcs();
 
-    translate([ -5, 70, opto_z0 ])
+    translate([ -5, 72, opto_z0 ])
     opto(10);
 
     translate([ -4, -40, 20 ])
@@ -393,7 +393,7 @@ led_strip_x0 = 1 + ((bp_dz - led_dy) / 2);
 led_strip_y0 = bp_dx - 20;
 led_recess = -0.4; // thickness of panel for LEDs to shine through
 
-module back_panel()
+module front_panel()
 {
     led_strip_offset = [ led_recess + bp_thick - led_thick, led_strip_y0, led_strip_x0 ];
     led_strip_rot = [ 90, 0, 90 ];
@@ -490,11 +490,13 @@ module top()
     }
 }
 
-//rotate([ 0, 180, 0 ] )
 if (1)
+//projection(true)
+//translate([ 5, base_dy/2, 2] )
 {
     {
-        #if (1) 
+        #if (0) 
+        //rotate([ 180, 0, 0 ] )
         translate(panel_offset)
         top();
 
@@ -503,7 +505,7 @@ if (1)
         if (1) 
         //rotate( [ 0, 90, 0 ] )
         translate([ base_dx, 0, 0 ] )
-        back_panel();   
+        front_panel();   
     }
 }
 
