@@ -19,8 +19,18 @@ jack_y0 = 15;
 // toslink port
 opto_dx = 9.7;
 opto_dy = 8.9;
+opto_dz = 9.2;
 opto_z0 = 4;
 opto_pitch = 10.8;
+
+op_dx = 28;
+op_dy = 60;
+op_dz = 1.5;
+
+op_holes = [
+    [ 24.5, op_dy - 3.5 ],
+    [ 24, op_dy - 56 ],
+];
 
 // pmod breakout
 tang_nano_dx = 68.4;
@@ -54,7 +64,7 @@ psu_points = [
     [ psu_hole_x0, psu_hole_y0 + psu_hole_dy ],
 ];
 
-psu_x0 = 30;
+psu_x0 = 40;
 psu_y0 = -15 - psu_dy;
 
 // base
@@ -84,6 +94,12 @@ br_t = 4;
 br_hole_r = m3_hole_r;
 br_thread_r = m3_thread_r;
 br_ys = [ 0, ((bp_dy-br_w)/2) - 28, bp_dy-br_w, ];
+
+// ADC bar support
+abs_dz = 37.1;
+abs_dx = 3.2;
+abs_dy = 5;
+abs_margin = 3;
 
 // Third party strip of 8 WS2812 LEDs
 
@@ -162,19 +178,6 @@ module tang_nano()
     *
     */
 
-module opto(t)
-{
-    for (y = [ 0, opto_pitch] )
-    {
-        translate([ 0, y, 0 ] )
-        cube([ opto_dx, opto_dy, t]);
-    }
-}
-
-    /*
-    *
-    */
-
 module adc()
 {
     translate([ 0, 0, adc_dy ] )
@@ -201,18 +204,53 @@ module adcs()
     *
     */
 
+module opto_board(ext)
+{
+    difference()
+    {
+        union()
+        {
+            cube([ op_dx, op_dy, op_dz ] );
+
+            // opto device
+            for (x = [ 94.44 - 91.5, 105.26 - 91.5 ])
+            {
+                translate([ x - 2.3, op_dy - opto_dy, op_dz ] )
+                cube([ opto_dx, opto_dy + ext, opto_dz ] );
+            }
+        }
+
+        for (xy = op_holes)
+        {
+            translate([ xy[0], xy[1], -0.01 ])
+            cylinder(h=op_dz + 0.02, r=m3_hole_r);
+        }
+    }
+}
+
+    /*
+    *
+    */
+
+op_z0 = 2.5;
+opto_trans = [ op_dy + 1, 71, op_z0 ];
+
 module boards()
 {
     adcs();
 
-    translate([ -5, 72, opto_z0 ])
-    opto(10);
+    {
+        translate( [ 0, 0, op_dz ] )
+        translate(opto_trans)
+        rotate([ 0, 0, 90 ] )
+        opto_board(10);
+    }
 
     translate([ -4, -40, 20 ])
     rotate([ 90, 0,  90 ] )
     iec_cutout(iec_s3, 20, m3_hole_r);
 
-    translate([ adc_dx - pmod_y0 +2, 5 + (adc_pitch * 4), 0 ] )
+    translate([ adc_dx - pmod_y0 + 12, 9 + (adc_pitch * 4), 0 ] )
     rotate([ 0, 0, 270 ] )
     tang_nano();
 
@@ -276,6 +314,32 @@ module base_fix()
     }
 }
 
+module bar_support()
+{
+    dz = abs_dz / 2;
+
+    points = [
+        // x, z
+        [ 0, dz ],
+        [ 0, abs_dz + abs_margin ],
+        [ abs_dx + abs_margin, abs_dz + abs_margin ],
+        [ abs_dx + abs_margin, abs_dz - abs_margin ],
+        [ 0, dz ],
+    ];
+
+    translate([ bp_thick - 0.01, abs_dy/2, 0 ] )
+    difference()
+    {
+        rotate( [ 90, 0, 0 ] )
+        linear_extrude(height=abs_dy)
+        polygon(points);
+
+        translate([ abs_dx, 0.01, abs_dz ] )
+        rotate([ 90, 0, 0 ] )
+        cylinder(h=abs_dy+0.02, r=m3_hole_r);
+    }
+}
+
 module base()
 {
     translate(panel_offset)
@@ -307,6 +371,20 @@ module base()
         }
     }
 
+    // opto board mounts
+    for (xy = op_holes)
+    {
+        translate(opto_trans)
+        rotate([ 0, 0, 90 ] )
+        translate([ xy[0], xy[1], -op_z0-0.01])
+        difference()
+        {
+            cylinder(h=opto_z0, r=m3_hole_r * 2);
+            translate([ 0, 0, 0.01 ] )
+            cylinder(h=opto_z0, r=m3_thread_r);
+        }
+    }
+
     // side fixing for top section
     translate(panel_offset)
     for (x = top_fix_xs)
@@ -317,11 +395,31 @@ module base()
         base_fix();
     }
 
+    // back stop for ADC cards
+    for (y = [ 0 :  adc_pitch : adc_pitch * 3 ] )
+    {
+        stop_dx = 3;
+        stop_dy = adc_pitch + 1;
+        stop_dz = 4;
+        translate( [ adc_dx + 0.5, y - (stop_dy/2), 0 ] )
+        cube( [ stop_dx, stop_dy, stop_dz ] );
+    }
+
     difference()
     {
         // back panel
         translate(panel_offset)
-        cube([ bp_thick, bp_dy, bp_dz ] );
+        union() {
+            cube([ bp_thick, bp_dy, bp_dz ] );
+
+            off = 7;
+            yy0 = -off - y0;
+            for (y = [ yy0 : adc_pitch : yy0 + (adc_pitch * 4) ] )
+            {
+                translate([ 0, y, base_thick ] )
+                bar_support(); 
+            }
+        }
 
         #boards();
     }
@@ -502,7 +600,7 @@ if (1)
 
         if (1) base();
 
-        if (1) 
+        if (0) 
         //rotate( [ 0, 90, 0 ] )
         translate([ base_dx, 0, 0 ] )
         front_panel();   
