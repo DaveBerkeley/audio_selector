@@ -39,8 +39,8 @@ if __name__ == "__main__":
 
     freq = args.freq
     # external clock
-    ext_freq = 48e3 * 512 # External MCK from I2S pin "72"
-    ext_freq = 48e3 * 1024 # External Xtal on PMOD pin "38" "29" "51"
+    ext_freq = 48e3 * 512 # External MCK from I2S pin
+    ext_freq = 48e3 * 1024 # External Xtal on PMOD
     freq = ext_freq
 
     platform = ext_clock(freq, Platform)

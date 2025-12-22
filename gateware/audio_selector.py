@@ -11,6 +11,8 @@ from streams.monitor import Monitor
 from streams.ws2812 import LedStream
 from streams.ops import Enumerate
 
+#import pll
+
 from gpio import GpioOut, GpioIn
 
 from ppm import StereoAbs, PPM, BarGraph
@@ -33,7 +35,6 @@ class TR:
     LED = 1
     SELECT = 2
     MONITOR = 6
-    AUX = 15
     KEYS = 16
 
 routes = [
@@ -41,7 +42,6 @@ routes = [
     TR.LED,
     #TR.MONITOR,
     #TR.SELECT,
-    TR.AUX,
     TR.KEYS,
 ]
 
@@ -241,10 +241,6 @@ class AudioSelector(Elaboratable):
             self.mods += [ self.gpio_led ]
             self.connects += [ (self.router.o[TR.GPIO], self.gpio_led.i) ]
 
-        self.gpio_aux = GpioOut(4, name="gpio.aux")
-        self.mods += [ self.gpio_aux ]
-        self.connects += [ (self.router.o[TR.AUX], self.gpio_aux.i) ]
-
         if TR.SELECT in routes:
             self.gpio_select = GpioOut(4, name="gpio.select")
             self.mods += [ self.gpio_select ]
@@ -302,6 +298,7 @@ class AudioSelector(Elaboratable):
         self.spdif = SPDIF_Tx(iwidth=audio)
         self.mods += [ self.spdif ]
         self.connects += [ (self.tee.o[0], self.spdif.i), ]
+        self.spdif_o = Signal()
 
         self.i2so = I2SOutput(width=16, tx_clock=self.i2s_txck)
         self.mods += [ self.i2so ]
@@ -366,6 +363,8 @@ class AudioSelector(Elaboratable):
                 (self.rx_split.right, self.r_select.i[selects-1], [], {"right":"data"}, {"right":truncate}),
             ]
 
+            self.spdif_i = Signal()
+
         if TR.MONITOR in routes:
             self.monitor = Monitor(layout=audio_layout, n=8)
             self.mods += [ self.monitor ]
@@ -429,7 +428,18 @@ class AudioSelector(Elaboratable):
         self.debounce = Signal()
         m.d.sync += self.debounce.eq(counter == 0)
         m.d.sync += self.gpio_ui.en.eq(self.debounce)
- 
+
+        # connect the SPDIF io to spdif_i/o
+        if hasattr(self, "rx"):
+            idx = len(self.l_select.i) - 1
+            with m.If(self.ui.channel == idx):
+                # loop spdif input to the output
+                m.d.comb += [ self.spdif_o.eq(self.spdif_i) ]
+            with m.Else():
+                m.d.comb += [ self.spdif_o.eq(self.spdif.o) ]
+            m.d.comb += self.rx.i.eq(self.spdif_i) 
+        else:
+            m.d.comb += self.spdif_o.eq(self.spdif.o)
         return m
 
 #
@@ -441,6 +451,10 @@ class _System(AudioSelector):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.comb = []
+        #limits = pll.get_limits(25, 55, device)
+        #self.pll = pll.PLL(27, 55, limits)
+        #self.counter_s = Signal(20)
+        #self.counter_a = Signal(20)
 
     def do_connect(self, platform):
         comb = []
@@ -466,38 +480,36 @@ class _System(AudioSelector):
         ]
 
         spdif = platform.request("spdif", 0)
-        comb += [ self.spdif.aux.eq(self.gpio_aux.o) ]
-
-        if hasattr(self, "rx"):
-            comb += [ self.rx.i.eq(from_i(spdif.rx)) ]
-            idx = len(self.l_select.i) - 1
-            # TODO
-            #with m.If(self.ui.channel == idx):
-            #    # spdif input to the output
-            #    comb += [ to_o(spdif.tx).eq(from_i(spdif.rx)) ]
-            #with m.Else():
-            #    comb += [ to_o(spdif.tx).eq(self.spdif.o) ]
-        else:
-            comb += to_o(spdif.tx).eq(self.spdif.o)
+        comb += [ 
+            self.spdif_i.eq(from_i(spdif.rx)),
+            to_o(spdif.tx).eq(self.spdif_o),
+        ]
 
         # I2S output monitor
-        i2s = platform.request("i2s", 1)
-        comb += [
-            to_o(i2s.sck).eq(self.i2so.phy.sck),
-            to_o(i2s.ws).eq(self.i2so.phy.ws),
-            to_o(i2s.sd).eq(self.i2so.phy.sd),
-        ]
+        try:
+            i2s = platform.request("i2s", 1)
+            comb += [
+                to_o(i2s.sck).eq(self.i2so.phy.sck),
+                to_o(i2s.ws).eq(self.i2so.phy.ws),
+                to_o(i2s.sd).eq(self.i2so.phy.sd),
+            ]
+        except Exception as ex:
+            print(ex)
 
-        i2s = platform.request("i2s", 0)
-        # connect the I2S timing to the rx_clock
-        comb += [
-            self.i2s_rxck.sck.eq(from_i(i2s.sck)),
-            self.i2s_rxck.ws.eq(from_i(i2s.ws)),
-        ]
-        # connect the I2S data inputs
-        for i, i2si in enumerate(self.i2si):
-            s = getattr(i2s, f"d{i}")
-            comb += [ i2si.i.eq(from_i(s)) ]
+        try:
+            i2s = platform.request("i2s", 0)
+            # connect the I2S timing to the rx_clock
+            comb += [
+                self.i2s_rxck.sck.eq(from_i(i2s.sck)),
+                self.i2s_rxck.ws.eq(from_i(i2s.ws)),
+            ]
+            # connect the I2S data inputs
+            for i, i2si in enumerate(self.i2si):
+                s = getattr(i2s, f"d{i}")
+                comb += [ i2si.i.eq(from_i(s)) ]
+        except Exception as ex:
+            print(ex)
+            #raise
 
         try:
             ws2812 = platform.request("ws2812", 0)
@@ -522,8 +534,16 @@ class _System(AudioSelector):
 
         try:
             test = platform.request("test", 0)
+
             comb += [
                 to_o(test).eq(Cat(
+                    #i2s.mck.i, i2s.sck.i, i2s.ws.i, i2s.d0.i, i2s.d1.i, i2s.d2.i, i2s.d3.i,
+                    #spi.cs.i, spi.sck.i, spi.copi.i,
+                    #spdif.tx.o,
+                    #self.pll.clk_in,
+                    #self.pll.clk_out,
+                    #self.counter_s[:2],
+                    #self.counter_a[:2],
                     #self.spdif.o,
                     #i2s.sck.i,
                     #i2s.ws.i,
@@ -554,6 +574,17 @@ class _System(AudioSelector):
             m.d.comb += self.comb
         else:
             m.d.comb += self.do_connect(platform)
+
+        #m.submodules += self.pll
+
+        #m.d.comb += [
+        #    self.pll.clk_in.eq(platform.request("clk27").i),
+        #    self.pll.rst_in.eq(0),
+        #]
+
+        #m.domains.audio = ClockDomain("audio")
+        #m.d.sync += self.counter_s.eq(self.counter_s+1)
+        #m.d.audio += self.counter_a.eq(self.counter_a+1)
 
         return m
 
@@ -605,7 +636,7 @@ def get_resources(platform, lang="Amaranth"):
     def make_io_board(conn):
         # audio selector PCB. see LinuxNotes_07-Dec-2025
         r = []
-        r += make_spi(conn=conn)
+        r += make_spi(conn=conn, order="4 3 2 1") # cs, sck, copi, cipo
         r += make_spdif(conn=conn, idx=0, order="10 9")
         r += make_io("ws2812", idx=0, _pins="7", _dir="o", conn=conn, v="3V3")
         r += make_clock(freq=49.152e6, _pin="8", name="ckext", conn=conn)
@@ -613,24 +644,19 @@ def get_resources(platform, lang="Amaranth"):
 
     if family == "GW1NR-9C":
         # TangNano 9k
-        pmod_spi   = ("pmod", 2)
-        pmod_i2so  = ("pmod", 0)
-        pmod_spdif = ("pmod", 0)
+        pmod_io    = ("pmod", 0)
         pmod_i2si  = ("pmod", 1)
+        #pmod_i2so  = ("pmod", 4)
         pmod_test  = ("pmod", 4)
         pmod_sw    = ("pmod", 3) # 1V8 port
 
         r = []
-        #r += make_test(conn=pmod_test)
+        r += make_test(conn=pmod_test, order="1 2 3 4 8 9 10") # skip the 1V8 pin for now!
         r += make_i2s_backplane(conn=pmod_i2si, idx=0)
-        r += make_i2s_o(conn=pmod_i2so, idx=1)
-        #r += make_io("sw", idx=0, _pins="4 3 2", _dir="i", conn=pmod_sw, v="3V3", pull="up")
+        #r += make_i2s_o(conn=pmod_i2so, idx=1)
+        r += make_io("sw", idx=0, _pins="4 3 2", _dir="i", conn=pmod_sw, v="1V8", pull="up")
+        r += make_io_board(pmod_io)
 
-        # will be replaced by make_io_board()
-        r += make_spi(conn=pmod_spi)
-        r += make_spdif(conn=pmod_spdif, idx=0)
-        r += make_io("ws2812", idx=0, _pins="10", _dir="o", conn=pmod_spdif, v="3V3")
-        r += make_clock(freq=49.152e6, _pin="10", name="ckext", conn=pmod_spi)
         return r
 
     if family == "ecp5":
