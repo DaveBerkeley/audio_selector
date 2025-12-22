@@ -1,8 +1,8 @@
 #!/bin/env python
 
-from litex_boards.targets.sipeed_tang_nano_9k import main
-from litex_boards.targets.sipeed_tang_nano_9k import BaseSoC as _BaseSoC
+import litex_boards.targets.sipeed_tang_nano_9k as board
 from litex_boards.platforms.sipeed_tang_nano_9k import Platform
+from litex.soc.cores.clock.gowin_gw1n import GW1NPLL as PLL
 
 from litex.soc.integration.builder import Builder
 
@@ -14,7 +14,7 @@ import amaranth
 
 from wrapper import Wrapper
 
-class BaseSoC(_BaseSoC):
+class BaseSoC(board.BaseSoC):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -85,9 +85,34 @@ class BaseSoC(_BaseSoC):
 
 def main():
     from litex.build.parser import LiteXArgumentParser
-    parser = LiteXArgumentParser(platform=Platform, description="LiteX SoC on Tang Nano 9K.")
+
+    def ext_clock(freq, Platform, pin="52", ck_name="ckext"):
+        # Override the on-board clock with an external one
+        class _Platform(Platform):
+            default_clk_name = ck_name
+            default_clk_freq = freq
+            default_clk_period = 1e9/freq
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                from litex.build.generic_platform import Pins, IOStandard
+                _io = [
+                    (ck_name,  0, Pins(pin), IOStandard("LVCMOS33")),
+                ]
+                self.add_extension(_io)
+    
+        return _Platform
+
+    ext_clock_freq = 27e6 # 49.152e6
+    P = ext_clock(ext_clock_freq, Platform, pin="52", ck_name="clk27")
+    import litex_boards
+    litex_boards.platforms.sipeed_tang_nano_9k.Platform = P
+    #P = Platform
+    #ext_clock_freq = 27e6
+
+    parser = LiteXArgumentParser(platform=P, description="LiteX SoC on Tang Nano 9K.")
     parser.add_target_argument("--flash",                action="store_true",      help="Flash Bitstream.")
-    parser.add_target_argument("--sys-clk-freq",         default=27e6, type=float, help="System clock frequency.")
+    parser.add_target_argument("--sys-clk-freq",         default=ext_clock_freq, type=float, help="System clock frequency.")
     parser.add_target_argument("--bios-flash-offset",    default="0x0",            help="BIOS offset in SPI Flash.")
     parser.add_target_argument("--with-spi-sdcard",      action="store_true",      help="Enable SPI-mode SDCard support.")
     parser.add_target_argument("--with-video-terminal",  action="store_true",      help="Enable Video Terminal (HDMI).")
@@ -98,6 +123,58 @@ def main():
     args.toolchain = 'apicula'
     args.cpu_type = 'serv'
 
+    class CRG(board._CRG):
+        def __init__(self, platform, sys_clk_freq, *args, **kwargs):
+            #super().__init__(platform, sys_clk_freq, *args, **kwargs)
+            #return
+            self.platform = platform
+
+            self.rst    = migen.Signal()
+            self.cd_sys = migen.ClockDomain()
+
+            # Clk / Rst
+            clk = platform.request(platform.default_clk_name)
+            rst_n = platform.request("user_btn", 0)
+
+            # PLL
+            self.pll = pll = PLL(devicename=platform.devicename, device=platform.device)
+            self.comb += pll.reset.eq(~rst_n)
+            pll.register_clkin(clk, platform.default_clk_freq)
+            pll.create_clkout(self.cd_sys, sys_clk_freq)
+
+            self.add_constraint(self.pll)
+            # Add any additional domains to the PLL config
+            for name, freq, pin, ckfreq in domains:
+                # grab the default xtal data from the main PLL
+                pll_pin, pll_freq = self.pll.clkin, self.pll.clkin_freq
+                self.add_pll_domain(name, freq, pll_pin, pll_freq)
+
+        def add_constraint(self, pll):
+            for ck, f, a, b in pll.clkouts.values():
+                #assert len(pll.clkouts) == 1, pll.clkouts
+                #ck, f, a, b = pll.clkouts[0]
+                print("add_constraint", ck, f)
+                self.platform.add_period_constraint(ck, 1e9/f)
+
+        # Add domains to the PLL
+        def add_pll_domain(self, domain, freq, clk, clk_freq):
+            pll_name = f"{domain}_pll"
+            cd_name = f"cd_{domain}"
+            print(f"add_domain({domain}, {freq}, {clk}, {clk_freq})")
+            pll = PLL(devicename=self.platform.devicename, device=self.platform.device)
+            setattr(self, pll_name, pll)
+            #self.comb += pll.reset.eq(~rst_n | self.rst)
+            self.comb += pll.reset.eq(self.rst)
+            pll.register_clkin(clk, clk_freq)
+            cd = migen.ClockDomain(domain)
+            setattr(self, cd_name, cd)
+            pll.create_clkout(cd, freq, margin=0)
+            self.add_constraint(pll)
+
+    # Monkey-patch the clock generation module
+    #board._CRG = CRG
+
+    domains = [ ("fast", 49.152e6 * 2, None, None) ]
     soc = BaseSoC(
         toolchain           = args.toolchain,
         sys_clk_freq        = args.sys_clk_freq,
@@ -105,6 +182,9 @@ def main():
         with_video_terminal = args.with_video_terminal,
         **parser.soc_argdict,
     )
+
+    #for domain in domains:
+    #    soc.wrapper.connect_domain(domain[0])
 
     platform = soc.platform
     from audio_selector import _System, get_resources
@@ -114,7 +194,7 @@ def main():
     io = get_resources(platform, lang="LiteX")
     soc.platform.add_extension(io)
 
-    # Add the connectors from the tang nano dock to the platform
+    # Add the PMOD connectors from the tang nano dock to the platform
     from tang_nano_dock import TangNanoDock
     for name, idx, pins in TangNanoDock.raw_connectors:
         print(name, idx, pins)
@@ -130,7 +210,6 @@ def main():
 
     soc.wrapper.add_module(mod)
     mod.do_connect(platform=None)
-
 
     if args.with_spi_sdcard:
         soc.add_spi_sdcard()
@@ -163,7 +242,7 @@ def main():
     if args.flash:
         prog = soc.platform.create_programmer(kit=args.prog_kit)
         prog.flash(0, builder.get_bitstream_filename(mode="flash", ext=".fs")) # FIXME
-        # Axternal SPI programming not supported by gowin 'programmer_cli' now!
+        # External SPI programming not supported by gowin 'programmer_cli' now!
         # if needed, use openFPGALoader or Gowin programmer GUI
         if args.prog_kit == "openfpgaloader":
             prog.flash(int(args.bios_flash_offset, 0), builder.get_bios_filename(), external=True)
