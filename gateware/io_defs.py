@@ -138,7 +138,12 @@ def get_attr(v=None, pull=None, opendrain=None, drive=None, diff=False, r=None, 
         return attrs(io[v])
 
     if family == "iCE40":
-        assert pull is None, (family, hdl_lang) # TODO
+        io_type = io[v]
+        d = {
+            "IO_TYPE" : io_type,
+        }
+        if pull:
+            d["PULLMODE"] = { "down" : "DOWN", "up" : "UP", }[pull]
         return attrs(IO_STANDARD=io[v])
  
     assert 0, family # TODO

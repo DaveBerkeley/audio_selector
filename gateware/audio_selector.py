@@ -40,7 +40,7 @@ class TR:
 routes = [
     #TR.GPIO,
     TR.LED,
-    #TR.MONITOR,
+    TR.MONITOR,
     #TR.SELECT,
     TR.KEYS,
 ]
@@ -51,8 +51,8 @@ routes = [
 class UI(Elaboratable):
 
     KEY_SW = 0x01
-    KEY_A  = 0x02
-    KEY_B  = 0x04
+    KEY_A  = 0x04
+    KEY_B  = 0x02
 
     def __init__(self, chans=5):
         keys = 3
@@ -221,20 +221,27 @@ class AudioSelector(Elaboratable):
         self.connects = []
         self.comb = []
 
-        self.in_arb = Arbiter(layout=control_layout, n=2)
-        self.mods += [ self.in_arb ]
+        has_ci = True # add to TR items?
 
-        self.ci = Stream(layout=control_layout, name="ci")
-        self.connects += [ (self.ci, self.in_arb.i[0]) ]
+        if has_ci:
+            self.in_arb = Arbiter(layout=control_layout, n=2)
+            self.mods += [ self.in_arb ]
+
+            self.ci = Stream(layout=control_layout, name="ci")
+            self.connects += [ (self.ci, self.in_arb.i[0]) ]
 
         self.spi = SpiPeripheral(width=control, last_cs=True)
         self.mods += [ self.spi ]
-        self.connects += [ (self.spi.o, self.in_arb.i[1]) ]
+        if has_ci:
+            self.connects += [ (self.spi.o, self.in_arb.i[1]) ]
 
         sink = True
         self.router = Router(layout=control_layout, addr_field="data", addrs=routes, sink=sink)
         self.mods += [ self.router ]
-        self.connects += [ (self.in_arb.o, self.router.i) ]
+        if has_ci:
+            self.connects += [ (self.in_arb.o, self.router.i) ]
+        else:
+            self.connects += [ (self.spi.o, self.router.i) ]
 
         if TR.GPIO in routes:
             self.gpio_led = GpioOut(8, name="gpio.led")
@@ -329,6 +336,11 @@ class AudioSelector(Elaboratable):
         if TR.KEYS in routes:
             self.gpio_ui = GpioIn(3, name="gpio.ui")
             self.mods += [ self.gpio_ui ]
+            self.comb += [
+                # Arbiter expects packets, so turn gpio data into a packet
+                self.gpio_ui.o.first.eq(1),
+                self.gpio_ui.o.last.eq(1),
+            ]
 
             key_layout = self.gpio_ui.o.get_layout()
             self.key_arb = Arbiter(layout=key_layout, n=2) 
@@ -385,8 +397,11 @@ class AudioSelector(Elaboratable):
             print(a, b, ex, mm, [ f"{k}:{v.__name__}" for k,v in fn.items() ])
             m.d.comb += Stream.connect(a, b, exclude=ex, mapping=mm, fn=fn)
 
+        assert self.comb
         for eq in self.comb:
+            print("comb", eq)
             m.d.comb += eq
+        self.comb = []
 
         # The channel selection
         m.d.comb += [
@@ -450,7 +465,6 @@ class _System(AudioSelector):
     # Connect all the application specific io
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.comb = []
         #limits = pll.get_limits(25, 55, device)
         #self.pll = pll.PLL(27, 55, limits)
         #self.counter_s = Signal(20)
@@ -537,14 +551,11 @@ class _System(AudioSelector):
 
             comb += [
                 to_o(test).eq(Cat(
-                    #i2s.mck.i, i2s.sck.i, i2s.ws.i, i2s.d0.i, i2s.d1.i, i2s.d2.i, i2s.d3.i,
                     #spi.cs.i, spi.sck.i, spi.copi.i,
-                    #spdif.tx.o,
                     #self.pll.clk_in,
                     #self.pll.clk_out,
                     #self.counter_s[:2],
                     #self.counter_a[:2],
-                    #self.spdif.o,
                     #i2s.sck.i,
                     #i2s.ws.i,
                     #i2s.d0.i,
@@ -554,17 +565,15 @@ class _System(AudioSelector):
                     #i2s.mck.i,
                     s.valid,
                     s.ready,
-                    #self.gpio_select.o,
-                    self.l_select.o.data,
-                    #s.first,
-                    #s.last,
+                    s.first,
+                    s.last,
                     sd,
                 )),
             ]
         except Exception as ex:
             print(ex)
 
-        self.comb = comb
+        self.comb += comb
         return comb
 
     def elaborate(self, platform):
@@ -607,7 +616,7 @@ class System(_System):
                 leds.append(led.o)
                 i += 1
             except Exception as ex:
-                print("led error:", ex)
+                print(ex)
                 break
         leds = Cat(leds)
 
@@ -621,10 +630,12 @@ class System(_System):
 #
 #
 
-def get_resources(platform, lang="Amaranth"):
+def get_resources(platform, platform_name, system, lang="Amaranth"):
     from io_defs import set_platform
     from io_defs import make_i2s_o, make_spdif, make_spi, make_test
     from io_defs import make_clock, make_i2s_backplane, make_io
+
+    print("build for", platform_name)
 
     set_platform(platform, lang=lang)
 
@@ -642,7 +653,7 @@ def get_resources(platform, lang="Amaranth"):
         r += make_clock(freq=49.152e6, _pin="8", name="ckext", conn=conn)
         return r
 
-    if family == "GW1NR-9C":
+    if platform_name == "tangnano":
         # TangNano 9k
         pmod_io    = ("pmod", 0)
         pmod_i2si  = ("pmod", 1)
@@ -659,7 +670,7 @@ def get_resources(platform, lang="Amaranth"):
 
         return r
 
-    if family == "ecp5":
+    if platform_name == "i9":
         # colorlight i9
         # TODO
         pmod_i2so  = ("pmod", 4)
@@ -678,6 +689,36 @@ def get_resources(platform, lang="Amaranth"):
         r += make_io_board(pmod_io)
         return r
 
-    assert 0, (family, platform)
+    if platform_name == "icebreaker":
+        # TODO
+        assert system == "hatchat", system
+        pmod_i2si  = ("pmod", 0)
+        pmod_io    = ("pmod", 1)
+        pmod_sw    = ("pmod", 2)
+        pmod_i2so  = ("pmod", 2)
+
+        r = []
+        r += make_i2s_backplane(conn=pmod_i2si, idx=0)
+        r += make_i2s_o(conn=pmod_i2so, idx=1)
+        r += make_io("sw", idx=0, _pins="10 9 8", _dir="i", conn=pmod_sw, v="3V3", pull="up")
+        r += make_io_board(pmod_io)
+        return r
+
+    if platform_name == "icesugarnano":
+        # TODO
+        assert system == "hatchat", system
+        pmod_i2si  = ("pmod", 0)
+        pmod_io    = ("pmod", 1)
+        pmod_sw    = ("pmod", 2)
+        pmod_i2so  = ("pmod", 2)
+
+        r = []
+        #r += make_i2s_backplane(conn=pmod_i2si, idx=0)
+        #r += make_i2s_o(conn=pmod_i2so, idx=1)
+        r += make_io("sw", idx=0, _pins="10 9 8", _dir="i", conn=pmod_sw, v="3V3", pull="up")
+        #r += make_io_board(pmod_io)
+        return r
+
+    assert 0, (family, platform, platform_name)
 
 #   FIN

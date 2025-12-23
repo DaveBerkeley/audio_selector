@@ -25,10 +25,11 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--dot", help="generate Stream graph")
-    parser.add_argument("--prog", action="store_true", help="generate Stream graph")
+    parser.add_argument("--prog", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--freq", type=float, default=27e6*2)
     parser.add_argument("--platform", default="tangnano")
+    parser.add_argument("--system")
 
     args = parser.parse_args()
 
@@ -36,6 +37,10 @@ if __name__ == "__main__":
         from tang_nano_dock import TangNanoDock as Platform
     elif args.platform == "i9":
         from colorlight_i9_r7_2 import Colorlight_i9_R72Platform as Platform
+    elif args.platform == "icebreaker":
+        from amaranth_boards.icebreaker import ICEBreakerPlatform as Platform
+    elif args.platform == "icesugarnano":
+        from amaranth_boards.icesugar_nano import ICESugarNanoPlatform as Platform
 
     freq = args.freq
     # external clock
@@ -45,9 +50,10 @@ if __name__ == "__main__":
 
     platform = ext_clock(freq, Platform)
 
-    r = get_resources(platform)
+    r = get_resources(platform, args.platform, args.system, lang="Amaranth")
     platform.add_resources(r)
 
+    # TODO : select other systems?
     dut = System(freq)
     # TODO : how are the clock constraints passed to Amaranth?
     #platform.add_clock_constraint(s, freq)
