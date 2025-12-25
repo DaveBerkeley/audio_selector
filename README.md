@@ -200,6 +200,35 @@ The unit is designed to provide output via SPDIF / TOSLINK.
 However I've also put a 3.5mm stereo audio jack on the font panel
 with an I2S DAC connected to one of the PMOD ports.
 
+The DAC board I'm using is a PCM5102A based design 
+[GY-PCM5102](https://www.aliexpress.com/item/1005007384927164.html)
+that I bought from AliExpress.
+You can plug these straight into a PMOD port, which is very handy.
+The generic resource code for them looks like this :
+
+    def make_i2s_o(conn, idx=0, swap=False, slave=False, order="2 4 3"):
+        pck, pws, psd = [ swap_pmod_row(swap)(x) for x in order.split(' ') ]
+        print(f"resource i2so,{idx} {conn} sck={pck} ws={pws} sd={psd}")
+        sdir = "o"
+        if slave:
+            sdir = "i"
+        return [
+            # I2S output
+            resource("i2s", idx,
+                # PCM5102A module has sysck then bck (which is our audio bit clock)
+                subsignal("sck", pins(pck, dir=sdir, conn=conn)),
+                subsignal("ws",  pins(pws, dir=sdir, conn=conn)),
+                subsignal("sd",  pins(psd, dir="o", conn=conn)),
+                get_attr(v="3V3"),
+            ),
+        ]
+
+    def make_pcm5102(conn, idx=0, swap=False):
+        return make_i2s_o(conn, idx, swap)
+
+I probably should have mounted the line-out socket on the back panel, not the front.
+But the main output is supposed to be the optical link, not this socket.
+
 Gateware
 ====
 
