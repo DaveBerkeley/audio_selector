@@ -254,7 +254,7 @@ def make_sipeed_mics(conn, idx=0, with_sk9822=False):
 #
 
 def make_i2s_backplane(conn, idx=0, controller=False):
-    # I2S backplane board : I2S inputs
+    # I2S backplane board : I2S inputs. See LinuxNotes_07-Dec-2025 
     print(f"resource i2s_backplane,{idx} {conn}")
     dirn = {True:"o", False:"i"}[controller]
     return [

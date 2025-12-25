@@ -40,7 +40,7 @@ class TR:
 routes = [
     #TR.GPIO,
     TR.LED,
-    TR.MONITOR,
+    #TR.MONITOR,
     #TR.SELECT,
     TR.KEYS,
 ]
@@ -263,7 +263,7 @@ class AudioSelector(Elaboratable):
  
         self.comb += self.ws2812.connect(self.router.o[TR.LED], self.led_arb.i[0])
 
-        self.i2s_rxck = I2SRxClock(width=32, owidth=16)
+        self.i2s_rxck = I2STxClock(width=32, owidth=16)
         self.mods += [ self.i2s_rxck ]
 
         self.i2s_txck = I2STxClock(width=16)
@@ -412,15 +412,16 @@ class AudioSelector(Elaboratable):
         if hasattr(self, "monitor"):
             mons = [
                 ("spi.o", self.spi.o, {}),
-                ("gpio_ui.o", self.gpio_ui.o, {}),
+                #("gpio_ui.o", self.gpio_ui.o, {}),
                 ("router.i", self.router.i, {}),
                 #("gpio.led.i", self.gpio_led.i, {}),
                 ("i2si[0].o", self.i2si[0].left, {}),
                 ("l_select.i[0]", self.l_select.i[0], {}),
-                ("l_select.i[1]", self.l_select.i[1], {}),
-                ("l_select.i[2]", self.l_select.i[2], {}),
+                #("l_select.i[1]", self.l_select.i[1], {}),
+                #("l_select.i[2]", self.l_select.i[2], {}),
                 #("l_select.i[3]", self.l_select.i[3], {}),
                 ("l_select.o", self.l_select.o, {}),
+                ("i2so.i", self.i2so.i, {"data":"left"}),
                 #("join.o", self.join.o, {"data":"left"}),
                 #("meter.o", self.meter.o, {}),
             ]
@@ -434,10 +435,20 @@ class AudioSelector(Elaboratable):
         counter = Signal(clock_bits)
         m.d.sync += counter.eq(counter + 1)
         # External Xtal is Fs * 1024
-        # We need Fs * 128 for the SPDIF 2*clock signal
-        m.d.comb += self.spdif.en.eq((counter & 0x07) == 0)
-        # We need Fs * 64 for the I2S output 2*clock signal
-        m.d.comb += self.i2s_txck.enable.eq((counter & 0x0f) == 0)
+        self.fs_128 = Signal()
+        self.fs_64  = Signal()
+        m.d.comb += self.fs_128.eq((counter & 0x07) == 0)
+        m.d.comb += self.fs_64.eq ((counter & 0x0f) == 0)
+
+        # Fs * 512 for the MCK I2S input master ref
+        self.mck = Signal()
+        m.d.comb += self.mck.eq(counter) # square wave : sys_ck/2
+        # Fs * 128 for the SPDIF 2*clock signal
+        m.d.comb += self.spdif.en.eq(self.fs_128)
+        # Fs * 128 for the I2S input 2*clock signal
+        m.d.comb += self.i2s_rxck.enable.eq(self.fs_128)
+        # Fs * 64 for the I2S output 2*clock signal
+        m.d.comb += self.i2s_txck.enable.eq(self.fs_64)
 
         # debounce (sample) clock for the UI buttons
         self.debounce = Signal()
@@ -514,8 +525,9 @@ class _System(AudioSelector):
             i2s = platform.request("i2s", 0)
             # connect the I2S timing to the rx_clock
             comb += [
-                self.i2s_rxck.sck.eq(from_i(i2s.sck)),
-                self.i2s_rxck.ws.eq(from_i(i2s.ws)),
+                to_o(i2s.sck).eq(self.i2s_rxck.sck),
+                to_o(i2s.ws).eq(self.i2s_rxck.ws),
+                to_o(i2s.mck).eq(self.mck),
             ]
             # connect the I2S data inputs
             for i, i2si in enumerate(self.i2si):
@@ -523,7 +535,7 @@ class _System(AudioSelector):
                 comb += [ i2si.i.eq(from_i(s)) ]
         except Exception as ex:
             print(ex)
-            #raise
+            raise
 
         try:
             ws2812 = platform.request("ws2812", 0)
@@ -548,25 +560,31 @@ class _System(AudioSelector):
 
         try:
             test = platform.request("test", 0)
+            dev = self.i2si[0]
 
             comb += [
                 to_o(test).eq(Cat(
-                    #spi.cs.i, spi.sck.i, spi.copi.i,
-                    #self.pll.clk_in,
-                    #self.pll.clk_out,
-                    #self.counter_s[:2],
-                    #self.counter_a[:2],
-                    #i2s.sck.i,
-                    #i2s.ws.i,
-                    #i2s.d0.i,
-                    #i2s.d1.i,
-                    #i2s.d2.i,
-                    #i2s.d3.i,
-                    #i2s.mck.i,
                     s.valid,
                     s.ready,
-                    s.first,
-                    s.last,
+                    #s.first,
+                    #s.last,
+                    #sd,
+                    #i2s.mck.o, 
+                    i2s.sck.o, i2s.ws.o, i2s.d0.i, i2s.d1.i, i2s.d2.i, i2s.d3.i,
+                    #dev.rx_clock.sck, dev.rx_clock.ws,
+                    #dev.rx_clock.l_word, dev.rx_clock.r_word,
+
+                )),
+            ]
+        except Exception as ex:
+            print(ex)
+            raise
+
+        try:
+            test = platform.request("test", 1)
+
+            comb += [
+                to_o(test).eq(Cat(
                     sd,
                 )),
             ]
@@ -648,7 +666,7 @@ def get_resources(platform, platform_name, system, lang="Amaranth"):
         # audio selector PCB. see LinuxNotes_07-Dec-2025
         r = []
         r += make_spi(conn=conn, order="4 3 2 1") # cs, sck, copi, cipo
-        r += make_spdif(conn=conn, idx=0, order="10 9")
+        r += make_spdif(conn=conn, idx=0, order="10 9") # rx tx
         r += make_io("ws2812", idx=0, _pins="7", _dir="o", conn=conn, v="3V3")
         r += make_clock(freq=49.152e6, _pin="8", name="ckext", conn=conn)
         return r
@@ -657,20 +675,23 @@ def get_resources(platform, platform_name, system, lang="Amaranth"):
         # TangNano 9k
         pmod_io    = ("pmod", 0)
         pmod_i2si  = ("pmod", 1)
-        #pmod_i2so  = ("pmod", 4)
-        pmod_test  = ("pmod", 4)
+        pmod_i2so  = ("pmod", 4)
+        pmod_test  = ("pmod", 2)
+        #pmod_test2  = ("pmod", 4)
         pmod_sw    = ("pmod", 3) # 1V8 port
 
         r = []
-        r += make_test(conn=pmod_test, order="1 2 3 4 8 9 10") # skip the 1V8 pin for now!
-        r += make_i2s_backplane(conn=pmod_i2si, idx=0)
-        #r += make_i2s_o(conn=pmod_i2so, idx=1)
+        r += make_test(conn=pmod_test) # , order="1 2 3 4 8 9 10") # skip the 1V8 pin for now!
+        #r += make_test(conn=pmod_test2, idx=1, order="1 2 3 4 8 9 10") # skip the 1V8 pin for now!
+        r += make_i2s_backplane(conn=pmod_i2si, idx=0, controller=True)
+        r += make_i2s_o(conn=pmod_i2so, idx=1)
         r += make_io("sw", idx=0, _pins="4 3 2", _dir="i", conn=pmod_sw, v="1V8", pull="up")
         r += make_io_board(pmod_io)
 
         return r
 
     if platform_name == "i9":
+        # TODO : experimental
         # colorlight i9
         # TODO
         pmod_i2so  = ("pmod", 4)
@@ -683,7 +704,7 @@ def get_resources(platform, platform_name, system, lang="Amaranth"):
         r = []
         r += make_test(idx=0, conn=pmod_test)
         r += make_test(idx=1, conn=pmod_test2)
-        r += make_i2s_backplane(conn=pmod_i2si, idx=0)
+        r += make_i2s_backplane(conn=pmod_i2si, idx=0, controller=True)
         r += make_i2s_o(conn=pmod_i2so, idx=1)
         r += make_io("sw", idx=0, _pins="4 3 2", _dir="i", conn=pmod_sw, v="3V3", pull="up")
         r += make_io_board(pmod_io)
