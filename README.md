@@ -9,7 +9,7 @@ FPGA based digital audio switcher.
 I've started a number of digital audio projects, all more complex than this one.
 They are all still in the "pending" file. I hope to return to them.
 
-But I'd built all the gateware elements to do [I2S][I2S] and [SPDIF][SPDIF] io.
+I'd already built all the gateware elements to do [I2S][I2S] and [SPDIF][SPDIF] io.
 I had a [TangNano9k][TangNano9k] FPGA board that I wanted to try out.
 I'd bought several I2S ADC boards for another project.
 I wanted to make something fairly simple and straightforward.
@@ -167,7 +167,7 @@ This signal is then decimated, by a factor of 32
 and fed into a peak-hold module with a 2..3s decay function.
 These numbers should closely approximate the standard PPM design.
 
-The output is then fed into a bar-graph comparator, wich has a set of threasholds.
+The output is then fed into a bar-graph comparator, which has a set of thresholds.
 This outputs a packet of data for the LEDs.
 The Enumerate module adds the 'addr' field to the payload.
 The output is a Stream of LED addr,r,g,b data.
@@ -199,6 +199,62 @@ Signal Output
 The unit is designed to provide output via SPDIF / TOSLINK.
 However I've also put a 3.5mm stereo audio jack on the font panel
 with an I2S DAC connected to one of the PMOD ports.
+
+Gateware
+====
+
+The [gateware](https://github.com/DaveBerkeley/audio_selector/tree/master/gateware)
+is written in Amaranth.
+The project can be built by running make.
+The main module is in 
+[audio_selector.py](https://github.com/DaveBerkeley/audio_selector/blob/master/gateware/audio_selector.py).
+This contains the UI, the PPM meter and the audio system.
+I've settled on a style for using my Streams library.
+You create a module, add it to the list of submodules and connect it to previously created modules.
+eg:
+
+    self.spdif = SPDIF_Tx(iwidth=audio)
+    self.mods += [ self.spdif ]
+    self.connects += [ (self.tee.o[0], self.spdif.i), ]
+
+The lists self.mods and self.connects are used in the elaborate() method to generate the actual HDL.
+Using this style means that for most cases you have the create and connect code in the smae place.
+So most of the code that would normally go into elaborate() is now handled by a simple loop through
+the self.connects list.
+
+I've been working with different FPGAs and also using a combination of LiteX and Amaranth code.
+This prompted me to make a generic io layer
+[io_defs.py](https://github.com/DaveBerkeley/audio_selector/blob/master/gateware/io_defs.py)
+that allows generic statements to create io objects, resources, that work across FPGA
+types and families. I've tried this with Lattice ECP5 and iCE40 devices 
+and the GoWin GW1NR-9 used in this project.
+LiteX and Amaranth use different languages and have different numbering for PMOD connectors.
+This interface module tried to resolve those differences.
+
+The aim is to be able to declare an io resource in a non-platform specific way. 
+eg. for the Opto / Debug board, you can pass in a PMOD port and it will generate a
+generic resource :
+
+    def make_io_board(conn):
+        # audio selector PCB
+        r = []
+        r += make_spi(conn=conn, order="4 3 2 1") # cs, sck, copi, cipo
+        r += make_spdif(conn=conn, idx=0, order="10 9") # rx tx
+        r += make_io("ws2812", idx=0, _pins="7", _dir="o", conn=conn, v="3V3")
+        r += make_clock(freq=49.152e6, _pin="8", name="ckext", conn=conn)
+        return r
+
+This works with any combination of Amaranth and LiteX/migen and with the FPGAs I listed earlier.
+
+It is still work in progress, but I'm hoping to unify my designs 
+so they are completely portable across FPGA architectures.
+
+I've also got a 
+[/wrapper.py](https://github.com/DaveBerkeley/audio_selector/blob/master/gateware/wrapper.py)
+module, heavily based on a design in 
+[orbtrace](https://github.com/orbcode/orbtrace/blob/main/orbtrace/amaranth_glue/wrapper.py)
+that provides a way of wrapping Amaranth modules so they can be included in a LiteX project.
+This is still work in progress, but is working well so far.
 
 [LiteX][LiteX]
 ====
