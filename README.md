@@ -132,6 +132,8 @@ The Case
 
 ![Enclosure](docs/Screenshot_2025-12-25_11-13-42.png)
 
+CAD code in [GitHub](https://github.com/DaveBerkeley/audio_selector/blob/master/cad/audio_switcher.scad).
+
 I designed the case using [OpenSCAD](https://openscad.org/).
 This uses the [SCAD](https://openscad.org/cheatsheet/index.html) language to construct a design.
 I prefer this as a way to build 3D designs. 
@@ -145,8 +147,10 @@ hole in each PCB.
 
 The front panel has a recess for a WS2818 LED strip.
 I like these LEDs. 
-I've written drivers for the WS2818 and the similar YF923 (which has slightly diffrent timing).
+I've written drivers for the WS2812 and the similar YF923 (which has slightly diffrent timing).
 These take an input Stream with payload (("addr,8),("r",8),("g",8),("b",8)).
+
+[WS2812B datasheet](https://cdn-shop.adafruit.com/datasheets/WS2812B.pdf)
 
 Peak Programme Meter (PPM)
 ====
@@ -176,8 +180,6 @@ This can be connected directly to the LedStream (WS2812) driver,
 though I route it through an Arbiter (to allow debug setting of the LEDs)
 and the UI module.
 
-[WS2812B datasheet](https://cdn-shop.adafruit.com/datasheets/WS2812B.pdf)
-
 The UI module reads a rotational encoder switch on the front panel 
 to allow the audio channel to be selected.
 The switch is polled at >4ms to debounce the switches.
@@ -192,6 +194,62 @@ The front panel has a recess in it to allow the
 to shine through the PLA case. 
 It can be held in place with 2 M3 nuts.
 The LED drive signal comes from the optical/debug board.
+
+Gateware
+====
+
+The [gateware](https://github.com/DaveBerkeley/audio_selector/tree/master/gateware)
+is written in Amaranth.
+The project can be built by running make.
+The main module is in 
+[audio_selector.py](https://github.com/DaveBerkeley/audio_selector/blob/master/gateware/audio_selector.py).
+This contains the UI, the PPM meter and the audio system.
+I've settled on a style for using my Streams library.
+You create a module, add it to the list of submodules and connect it to previously created modules.
+eg:
+
+    self.spdif = SPDIF_Tx(iwidth=audio)
+    self.mods += [ self.spdif ]
+    self.connects += [ (self.tee.o[0], self.spdif.i), ]
+
+The lists self.mods and self.connects are used in the elaborate() method to generate the actual HDL.
+Using this style means that for most cases you have the create and connect code in the same place.
+Most of the code that would normally go into elaborate() is now handled by a simple loop through
+the self.connects list.
+
+I've been working with different FPGAs and also using a combination of LiteX and Amaranth code.
+This prompted me to make a generic io layer
+[io_defs.py](https://github.com/DaveBerkeley/audio_selector/blob/master/gateware/io_defs.py)
+that allows generic statements to create io objects, resources, that work across FPGA
+types and families. I've tried this with Lattice ECP5 and iCE40 devices 
+and the GoWin GW1NR-9 used in this project.
+LiteX and Amaranth use different languages and have different numbering for PMOD connectors.
+This interface module tried to resolve those differences.
+
+The aim is to be able to declare an io resource in a non-platform specific way. 
+eg. for the Opto / Debug board, you can pass in a PMOD port and it will generate a
+generic resource :
+
+    def make_io_board(conn):
+        # audio selector PCB
+        r = []
+        r += make_spi(conn=conn, order="4 3 2 1") # cs, sck, copi, cipo
+        r += make_spdif(conn=conn, idx=0, order="10 9") # rx tx
+        r += make_io("ws2812", idx=0, _pins="7", _dir="o", conn=conn, v="3V3")
+        r += make_clock(freq=49.152e6, _pin="8", name="ckext", conn=conn)
+        return r
+
+This works with any combination of Amaranth and LiteX/migen and with the FPGAs I listed earlier.
+
+It is still work in progress, but I'm hoping to unify my designs 
+so they are completely portable across FPGA architectures.
+
+I've also got a 
+[wrapper.py](https://github.com/DaveBerkeley/audio_selector/blob/master/gateware/wrapper.py)
+module, heavily based on a design in 
+[orbtrace](https://github.com/orbcode/orbtrace/blob/main/orbtrace/amaranth_glue/wrapper.py)
+that provides a way of wrapping Amaranth modules so they can be included in a LiteX project.
+This is still work in progress, but is working well so far.
 
 Signal Output
 ====
@@ -228,62 +286,6 @@ The generic resource code for them looks like this :
 
 I probably should have mounted the line-out socket on the back panel, not the front.
 But the main output is supposed to be the optical link, not this socket.
-
-Gateware
-====
-
-The [gateware](https://github.com/DaveBerkeley/audio_selector/tree/master/gateware)
-is written in Amaranth.
-The project can be built by running make.
-The main module is in 
-[audio_selector.py](https://github.com/DaveBerkeley/audio_selector/blob/master/gateware/audio_selector.py).
-This contains the UI, the PPM meter and the audio system.
-I've settled on a style for using my Streams library.
-You create a module, add it to the list of submodules and connect it to previously created modules.
-eg:
-
-    self.spdif = SPDIF_Tx(iwidth=audio)
-    self.mods += [ self.spdif ]
-    self.connects += [ (self.tee.o[0], self.spdif.i), ]
-
-The lists self.mods and self.connects are used in the elaborate() method to generate the actual HDL.
-Using this style means that for most cases you have the create and connect code in the smae place.
-So most of the code that would normally go into elaborate() is now handled by a simple loop through
-the self.connects list.
-
-I've been working with different FPGAs and also using a combination of LiteX and Amaranth code.
-This prompted me to make a generic io layer
-[io_defs.py](https://github.com/DaveBerkeley/audio_selector/blob/master/gateware/io_defs.py)
-that allows generic statements to create io objects, resources, that work across FPGA
-types and families. I've tried this with Lattice ECP5 and iCE40 devices 
-and the GoWin GW1NR-9 used in this project.
-LiteX and Amaranth use different languages and have different numbering for PMOD connectors.
-This interface module tried to resolve those differences.
-
-The aim is to be able to declare an io resource in a non-platform specific way. 
-eg. for the Opto / Debug board, you can pass in a PMOD port and it will generate a
-generic resource :
-
-    def make_io_board(conn):
-        # audio selector PCB
-        r = []
-        r += make_spi(conn=conn, order="4 3 2 1") # cs, sck, copi, cipo
-        r += make_spdif(conn=conn, idx=0, order="10 9") # rx tx
-        r += make_io("ws2812", idx=0, _pins="7", _dir="o", conn=conn, v="3V3")
-        r += make_clock(freq=49.152e6, _pin="8", name="ckext", conn=conn)
-        return r
-
-This works with any combination of Amaranth and LiteX/migen and with the FPGAs I listed earlier.
-
-It is still work in progress, but I'm hoping to unify my designs 
-so they are completely portable across FPGA architectures.
-
-I've also got a 
-[/wrapper.py](https://github.com/DaveBerkeley/audio_selector/blob/master/gateware/wrapper.py)
-module, heavily based on a design in 
-[orbtrace](https://github.com/orbcode/orbtrace/blob/main/orbtrace/amaranth_glue/wrapper.py)
-that provides a way of wrapping Amaranth modules so they can be included in a LiteX project.
-This is still work in progress, but is working well so far.
 
 [LiteX][LiteX]
 ====
