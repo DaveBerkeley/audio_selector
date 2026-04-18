@@ -2,12 +2,16 @@
 
 import litex_boards.targets.sipeed_tang_nano_9k as board
 from litex_boards.platforms.sipeed_tang_nano_9k import Platform
-from litex.soc.cores.clock.gowin_gw1n import GW1NPLL as PLL
+#import litex_boards.targets.sipeed_tang_nano_4k as board
+#from litex_boards.platforms.sipeed_tang_nano_4k import Platform
+#from litex.soc.cores.clock.gowin_gw1n import GW1NPLL as PLL
 
 from litex.soc.integration.builder import Builder
 
 import migen
 import amaranth
+
+from streams import Stream
 
 #
 #
@@ -23,30 +27,6 @@ class BaseSoC(board.BaseSoC):
     def add_wrapper(self):
         self.submodules.wrapper = Wrapper(platform=self.platform)
         self.wrapper.connect_domain('sys')
-
-    def xx_add_dram_dma(self, name, reader=True, with_csr=True, fifo_buffered=False, with_events=False):
-
-        port = self.get_dram_port()
-
-        if reader:
-            dma = LiteDRAMDMAReader(port, with_csr=with_csr, fifo_buffered=fifo_buffered)
-        else:
-            dma = LiteDRAMDMAWriter(port, with_csr=with_csr, fifo_buffered=fifo_buffered)
-        setattr(self.submodules, name, dma)
-
-        if with_events:
-            # Add an EventManager to handle interrupts
-            dma.ev = EventManager()
-            dma.submodules += dma.ev
-            dma.ev.done = EventSourceProcess(edge="rising")
-            dma.ev.finalize()
-
-            # Connect the 'done' interrupt
-            done = dma._done.status[0]
-            self.comb += dma.ev.done.trigger.eq(done)
-            self.irq.add(name, use_loc_if_exists=True)
-
-        return dma
 
     def add_wb(self, name, origin, size):
         # Export a Wishbone bus region to the Amaranth code
@@ -118,6 +98,8 @@ def main():
     parser.add_target_argument("--with-video-terminal",  action="store_true",      help="Enable Video Terminal (HDMI).")
     parser.add_target_argument("--prog-kit",             default="openfpgaloader", help="Programmer select from Gowin/openFPGALoader.")
     parser.add_target_argument("--dot",  help="generator Stream graph of module")
+    parser.add_argument("--platform", default="tangnano")
+    parser.add_argument("--system")
     args = parser.parse_args()
 
     args.toolchain = 'apicula'
@@ -187,12 +169,103 @@ def main():
     #    soc.wrapper.connect_domain(domain[0])
 
     platform = soc.platform
-    from audio_selector import _System, get_resources
+
+    #import sys
+    #sys.path.append('../../ulx3s/')
+    #from polyphase import PolyPhaseFir
+
+    #class _System(amaranth.Elaboratable):
+    #    def __init__(self, freq):
+    #        self.mods = []
+    #        self.connects = []
+    #        self.comb = []
+    #        #self.c = amaranth.Signal(20)
+    #        self.ci = Stream(layout=[("data", 32)], name="ci")
+
+    #        self.fir = PolyPhaseFir(16, 128, 4, 4)
+    #        self.mods += [ self.fir ]
+    #        self.connects += [ (self.fir.o, self.fir.i) ]
+    #        self.connects += [ (self.ci, self.fir.control) ]
+    #        self.comb += [ self.fir.start.eq(1) ]
+
+    #    def do_connect(self, platform):
+    #        comb = []
+
+    #        if platform is None:
+    #            # LiteX doesn't pass in a platform,
+    #            # so use the Amaranth one for all the application
+    #            # specific connections.
+    #            platform = self.platform
+    #            wrapper = platform.wrapper
+    #            def from_i(s): return wrapper.from_migen(s)
+    #            def to_o(s): return wrapper.from_migen(s)
+    #        else:
+    #            def from_i(s): return s.i
+    #            def to_o(s): return s.o
+
+    #        if 0:
+    #            spi = platform.request("spi", 0)
+
+    #            comb += [
+    #                self.spi.phy.scs.eq(from_i(spi.cs)),
+    #                self.spi.phy.sck.eq(from_i(spi.sck)),
+    #                self.spi.phy.copi.eq(from_i(spi.copi)),
+    #            ]
+
+    #        try:
+    #            test = platform.request("test", 0)
+    #            dev = self.i2si[0]
+
+    #            comb += [
+    #                to_o(test).eq(Cat(
+    #                    s.valid,
+    #                    s.ready,
+    #                    #s.first,
+    #                    #s.last,
+    #                    #sd,
+    #                    #i2s.mck.o, 
+    #                    i2s.sck.o, i2s.ws.o, i2s.d0.i, i2s.d1.i, i2s.d2.i, i2s.d3.i,
+    #                    #dev.rx_clock.sck, dev.rx_clock.ws,
+    #                    #dev.rx_clock.l_word, dev.rx_clock.r_word,
+
+    #                )),
+    #            ]
+    #        except Exception as ex:
+    #            print(ex)
+
+    #        self.comb += comb
+    #        return comb
+
+    #    def elaborate(self, platform):
+    #        m = amaranth.Module()
+    #        m.submodules += self.mods
+
+    #        for a, b in self.connects:
+    #            print(a, b)
+    #            m.d.comb += Stream.connect(a, b)
+
+    #        if self.comb:
+    #            m.d.comb += self.comb
+    #        else:
+    #            m.d.comb += self.do_connect(platform)
+
+    #        return m
+
+    #from audio_selector import _System, get_resources
+    class _System(amaranth.Elaboratable):
+        def __init__(self, freq):
+            self.c = amaranth.Signal(20)
+        def elaborate(self, _):
+            m = amaranth.Module()
+            m.d.sync += self.c.eq(self.c + 1)
+            return m
+        def do_connect(self, platform):
+            pass
 
     mod = _System(freq=args.sys_clk_freq)
 
-    io = get_resources(platform, lang="LiteX")
-    soc.platform.add_extension(io)
+    #io = get_resources(platform, args.platform, args.system, lang="LiteX")
+    #soc.platform.add_extension(io)
 
     # Add the PMOD connectors from the tang nano dock to the platform
     from tang_nano_dock import TangNanoDock
@@ -213,11 +286,6 @@ def main():
 
     if args.with_spi_sdcard:
         soc.add_spi_sdcard()
-
-    #if False:
-    #    fifo_buffered = False
-    #    dma_rd = soc.add_dram_dma("dma_rd", reader=True, fifo_buffered=fifo_buffered, with_events=True)
-    #    dma_wr = soc.add_dram_dma("dma_wr", reader=False, fifo_buffered=fifo_buffered, with_events=True)
 
     #pads_layout = [("clk", 1), ("cs_n", 1), ("mosi", 1), ("miso", 1)]
     #pads = migen.Record(pads_layout)
@@ -240,7 +308,7 @@ def main():
         prog.load_bitstream(builder.get_bitstream_filename(mode="sram"))
 
     if args.flash:
-        prog = soc.platform.create_programmer(kit=args.prog_kit)
+        prog = soc.platform.create_programmer()
         prog.flash(0, builder.get_bitstream_filename(mode="flash", ext=".fs")) # FIXME
         # External SPI programming not supported by gowin 'programmer_cli' now!
         # if needed, use openFPGALoader or Gowin programmer GUI
