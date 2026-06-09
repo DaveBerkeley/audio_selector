@@ -521,6 +521,18 @@ class _System(AudioSelector):
         except Exception as ex:
             print(ex)
 
+        # I2S output wifi server
+        try:
+            i2s = platform.request("i2s", 2)
+            comb += [
+                to_o(i2s.sck).eq(self.i2so.phy.sck),
+                to_o(i2s.ws).eq(self.i2so.phy.ws),
+                to_o(i2s.sd).eq(self.i2so.phy.sd),
+            ]
+        except Exception as ex:
+            print(ex)
+
+        # I2S input block from ADCs
         try:
             i2s = platform.request("i2s", 0)
             # connect the I2S timing to the rx_clock
@@ -676,6 +688,7 @@ def get_resources(platform, platform_name, system, lang="Amaranth"):
         pmod_io    = ("pmod", 0)
         pmod_i2si  = ("pmod", 1)
         pmod_i2so  = ("pmod", 4)
+        pmod_aux   = ("pmod", 5)
         pmod_test  = ("pmod", 2)
         #pmod_test2  = ("pmod", 4)
         pmod_sw    = ("pmod", 3) # 1V8 port
@@ -687,6 +700,8 @@ def get_resources(platform, platform_name, system, lang="Amaranth"):
         r += make_i2s_o(conn=pmod_i2so, idx=1)
         r += make_io("sw", idx=0, _pins="4 3 2", _dir="i", conn=pmod_sw, v="1V8", pull="up")
         r += make_io_board(pmod_io)
+        # aux connection for wifi RTPS server
+        r += make_i2s_o(conn=pmod_aux, idx=2, order="7 8 9")
 
         return r
 
